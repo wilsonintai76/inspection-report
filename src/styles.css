@@ -1,0 +1,543 @@
+/*
+ * styles.css - the design system, expressed in Tailwind.
+ *
+ * Two layers, deliberately:
+ *
+ *   1. `@theme` holds the tokens (colours, radius, shadows) so they are available as
+ *      real Tailwind utilities - `bg-brand`, `text-ink`, `rounded-panel`.
+ *   2. `@layer components` holds the named classes the markup uses, built from those
+ *      utilities with `@apply`.
+ *
+ * The second layer is not decoration. The verification suites select on `.notice.warn`,
+ * `.card .k`, `table.grid`, `.pill`, `.tabLabel` and friends, and more importantly
+ * those names are what makes the markup readable - `rounded-panel border-line` repeated
+ * forty times says less than `class="panel"`. Keeping them means the port changed how
+ * the page is BUILT, not what it looks like or what it is made of.
+ */
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f4f6fa;
+  --color-panel: #ffffff;
+  --color-ink: #16202e;
+  --color-ink-soft: #5b6b80;
+  --color-line: #d8e0ec;
+  --color-brand: #14508c;
+  --color-brand-dark: #0f4275;
+  --color-brand-soft: #e7f0fa;
+  --color-ok: #12704b;
+  --color-ok-soft: #e3f5ec;
+  --color-warn: #8a5a00;
+  --color-warn-soft: #fdf3dd;
+  --color-bad: #9c2020;
+  --color-bad-soft: #fdeaea;
+  --color-head: #eef3f9;
+
+  --radius-panel: 10px;
+  --radius-btn: 8px;
+
+  --shadow-panel: 0 1px 2px rgba(16, 32, 56, .06), 0 4px 14px rgba(16, 32, 56, .06);
+
+  --font-sans: "Segoe UI", Tahoma, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: Consolas, "Cascadia Mono", monospace;
+}
+
+@layer base {
+  html,
+  body {
+    @apply m-0 p-0;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans text-[15px] leading-normal antialiased;
+  }
+
+  /* Some of these elements are hidden by React, not by attribute juggling: `hidden`
+     must win over a display utility, or a hidden panel would reappear. */
+  [hidden] {
+    display: none !important;
+  }
+}
+
+@layer components {
+  /* ---------- layout ---------- */
+  .wrap {
+    @apply mx-auto max-w-375 px-5 pt-5.5 pb-16;
+  }
+
+  header.top {
+    @apply bg-linear-[135deg,#0f3d6e_0%,#14508c_55%,#1d6bb8_100%] px-5 py-5.5 text-white;
+  }
+
+  header.top .inner {
+    @apply mx-auto flex max-w-375 flex-wrap items-center gap-4.5;
+  }
+
+  header.top h1 {
+    @apply m-0 text-[21px] tracking-[.2px];
+  }
+
+  header.top p {
+    @apply mt-1 mb-0 text-[13.5px] opacity-[.88];
+  }
+
+  .brand-mark {
+    @apply grid size-11.5 flex-none place-items-center rounded-xl border border-white/30 bg-white/15 text-[22px];
+  }
+
+  .top-actions {
+    @apply ml-auto flex flex-wrap gap-2;
+  }
+
+  .panel {
+    @apply mb-4.5 rounded-panel border border-line bg-panel shadow-panel;
+  }
+
+  .panel > h2 {
+    @apply m-0 flex items-center gap-2.5 border-b border-line px-4.5 py-3.25 text-[15px] tracking-[.2px];
+  }
+
+  .panel > h2 .step {
+    @apply grid size-5.5 flex-none place-items-center rounded-full bg-brand-soft text-[12px] font-bold text-brand;
+  }
+
+  .panel > h2 .hint {
+    @apply ml-auto text-[12.5px] font-normal text-ink-soft;
+  }
+
+  .panel > .body {
+    @apply px-4.5 py-4;
+  }
+
+  /* ---------- dropzone ---------- */
+  .drop {
+    @apply rounded-panel border-2 border-dashed border-[#b9c9de] bg-[#fbfcfe] px-4.5 py-6.5 text-center transition-colors;
+  }
+
+  .drop.hot {
+    @apply border-brand bg-brand-soft;
+  }
+
+  .drop .big {
+    @apply mb-2 text-[32px] leading-none;
+  }
+
+  .drop strong {
+    @apply mb-0.75 block text-[15.5px];
+  }
+
+  .drop .sub {
+    @apply text-[13px] text-ink-soft;
+  }
+
+  .row-actions {
+    @apply mt-3.5 flex flex-wrap justify-center gap-2.5;
+  }
+
+  /* ---------- buttons ---------- */
+  button,
+  .btn {
+    @apply inline-flex cursor-pointer items-center gap-1.75 rounded-btn border border-line bg-white px-3.25 py-2 text-[13.5px] text-ink no-underline transition-colors;
+  }
+
+  button:hover:not(:disabled),
+  .btn:hover {
+    @apply border-[#bdcde2] bg-[#f1f5fa];
+  }
+
+  button:active:not(:disabled) {
+    @apply translate-y-px;
+  }
+
+  button:disabled {
+    @apply cursor-not-allowed opacity-[.48];
+  }
+
+  button.primary,
+  .btn.primary {
+    @apply border-brand bg-brand text-white;
+  }
+
+  button.primary:hover:not(:disabled),
+  .btn.primary:hover {
+    @apply border-brand-dark bg-brand-dark;
+  }
+
+  button.ghost-light {
+    @apply border-white/35 bg-white/15 text-white;
+  }
+
+  button.ghost-light:hover:not(:disabled) {
+    @apply bg-white/25;
+  }
+
+  button.tiny {
+    @apply px-2.25 py-1 text-[12.5px];
+  }
+
+  .link-btn {
+    @apply inline-block rounded-btn border border-line bg-white px-3 py-2 text-[13px] no-underline;
+  }
+
+  /* ---------- summary cards ---------- */
+  .cards {
+    @apply grid gap-3 grid-cols-[repeat(auto-fit,minmax(168px,1fr))];
+  }
+
+  .card {
+    @apply rounded-panel border border-line bg-[#fbfcfe] px-3.75 py-3.25;
+  }
+
+  .card .k {
+    @apply text-[12.5px] tracking-[.5px] text-ink-soft uppercase;
+  }
+
+  .card .v {
+    @apply mt-0.75 text-[26px] leading-[1.2] font-bold;
+  }
+
+  .card.good {
+    @apply border-[#bfe4d2] bg-ok-soft;
+  }
+
+  .card.good .v {
+    @apply text-ok;
+  }
+
+  .card.warn {
+    @apply border-[#eddcae] bg-warn-soft;
+  }
+
+  .card.warn .v {
+    @apply text-warn;
+  }
+
+  .card.bad {
+    @apply border-[#f0c9c9] bg-bad-soft;
+  }
+
+  .card.bad .v {
+    @apply text-bad;
+  }
+
+  /* ---------- tables ---------- */
+  .table-scroll {
+    @apply max-h-[62vh] overflow-auto border-t border-line;
+  }
+
+  table.grid {
+    @apply w-full border-separate border-spacing-0 text-[13.5px];
+  }
+
+  table.grid th,
+  table.grid td {
+    @apply border-b border-line px-2.75 py-2 text-left align-top;
+  }
+
+  table.grid thead th {
+    @apply sticky top-0 z-2 border-b border-[#cdd9e8] bg-head text-[12.5px] tracking-[.4px] whitespace-nowrap text-[#35465c] uppercase;
+  }
+
+  table.grid thead th.sortable {
+    @apply cursor-pointer select-none;
+  }
+
+  table.grid thead th.sortable:hover {
+    @apply bg-[#e3ebf5];
+  }
+
+  table.grid tbody tr:nth-child(even) {
+    @apply bg-[#fafcfe];
+  }
+
+  table.grid tbody tr:hover {
+    @apply bg-brand-soft;
+  }
+
+  td.mono {
+    @apply font-mono text-[12.5px] whitespace-nowrap;
+  }
+
+  th.num,
+  td.num {
+    @apply text-center;
+  }
+
+  .pill {
+    @apply inline-block rounded-full border border-line bg-head px-2 py-px text-[12px] whitespace-nowrap;
+  }
+
+  .pill.ok {
+    @apply border-[#bfe4d2] bg-ok-soft text-ok;
+  }
+
+  .pill.warn {
+    @apply border-[#eddcae] bg-warn-soft text-warn;
+  }
+
+  .pill.bad {
+    @apply border-[#f0c9c9] bg-bad-soft text-bad;
+  }
+
+  /* ---------- tabs ---------- */
+  .tabs {
+    @apply flex flex-wrap gap-1 border-b border-line px-3.5 pt-2.5;
+  }
+
+  .tabs button {
+    @apply rounded-t-btn border border-transparent border-b-0 bg-transparent px-3.5 py-2 text-[13.5px] text-ink-soft;
+  }
+
+  .tabs button:hover {
+    @apply bg-head;
+  }
+
+  .tabs button[aria-selected="true"] {
+    @apply -mb-px border-line bg-white font-semibold text-brand shadow-[inset_0_-2px_0_var(--color-brand)];
+  }
+
+  .tabs .count {
+    @apply rounded-full bg-head px-1.75 text-[11.5px] text-ink-soft;
+  }
+
+  .tabs button[aria-selected="true"] .count {
+    @apply bg-brand-soft text-brand;
+  }
+
+  /* ---------- toolbar ---------- */
+  .toolbar {
+    @apply flex flex-wrap items-end gap-2.5 border-b border-line bg-[#fbfcfe] px-4 py-3.25;
+  }
+
+  .toolbar.plain {
+    @apply border-0 bg-transparent p-0;
+  }
+
+  .field {
+    @apply flex flex-col gap-1;
+  }
+
+  .field label {
+    @apply text-[12px] tracking-[.4px] text-ink-soft uppercase;
+  }
+
+  input[type="search"],
+  input[type="text"],
+  select {
+    @apply min-w-37.5 rounded-btn border border-line bg-white px-2.5 py-1.75 text-[13.5px] text-ink;
+  }
+
+  input[type="search"] {
+    @apply min-w-60;
+  }
+
+  input:focus,
+  select:focus {
+    @apply border-brand outline-2 outline-[#a9c9ea];
+  }
+
+  .toolbar .spacer {
+    @apply ml-auto;
+  }
+
+  .note {
+    @apply text-[13px] text-ink-soft;
+  }
+
+  /* ---------- notices ---------- */
+  .notice {
+    @apply mb-2.5 rounded-btn border border-line bg-[#f7f9fc] px-3.5 py-2.75 text-[13.5px];
+  }
+
+  .notice.info {
+    @apply border-[#bcd6ef] bg-brand-soft;
+  }
+
+  .notice.ok {
+    @apply border-[#bfe4d2] bg-ok-soft;
+  }
+
+  .notice.warn {
+    @apply border-[#eddcae] bg-warn-soft;
+  }
+
+  .notice.bad {
+    @apply border-[#f0c9c9] bg-bad-soft;
+  }
+
+  .notice strong {
+    @apply mb-0.5 block;
+  }
+
+  .notice ul {
+    @apply mt-1.5 pl-5;
+  }
+
+  /* ---------- file list ---------- */
+  .filelist {
+    @apply m-0 grid list-none gap-2 p-0;
+  }
+
+  .filelist li {
+    @apply flex items-center gap-2.75 rounded-btn border border-line bg-[#fbfcfe] px-3 py-2.5;
+  }
+
+  .filelist .fi {
+    @apply text-[19px];
+  }
+
+  .filelist .fname {
+    @apply font-semibold break-all;
+  }
+
+  .filelist .fmeta {
+    @apply text-[12.5px] text-ink-soft;
+  }
+
+  .filelist .fx {
+    @apply ml-auto;
+  }
+
+  .empty {
+    @apply px-4.5 py-7.5 text-center text-[14px] text-ink-soft;
+  }
+
+  .miss {
+    @apply bg-warn-soft! shadow-[inset_2px_0_0_var(--color-warn)];
+  }
+
+  table.grid tr.clickable {
+    @apply cursor-pointer;
+  }
+
+  table.grid tr.clickable:hover td {
+    @apply bg-brand-soft;
+  }
+
+  table.grid tr.row-warn td {
+    @apply bg-warn-soft;
+  }
+
+  table.grid tr.row-warn:hover td {
+    @apply bg-[#f8e9c4];
+  }
+
+  td.cell-warn {
+    @apply font-bold text-warn;
+  }
+
+  .section-title {
+    @apply m-0 px-4 pt-4 text-[14px];
+  }
+
+  .print-only {
+    @apply hidden;
+  }
+
+  #printHead {
+    @apply mb-2.5;
+  }
+
+  #printHead h2 {
+    @apply mb-0.5 text-[15px];
+  }
+
+  #printHead .meta {
+    @apply text-[11.5px] text-[#444];
+  }
+
+  footer.foot {
+    @apply pt-2 text-center text-[12.5px] text-ink-soft;
+  }
+
+  /* ---------- admin login dialog ----------
+     A reader who wants to upload is not doing anything wrong, so the page stays
+     visible behind the backdrop instead of being hidden behind a blank screen. */
+  .overlay {
+    @apply fixed inset-0 z-50 grid place-items-center bg-[#0b1a2b]/45 px-4 py-8;
+  }
+
+  .modal {
+    @apply w-full max-w-105 rounded-panel border border-line bg-panel shadow-panel;
+  }
+
+  .modal > h3 {
+    @apply m-0 border-b border-line px-4.5 py-3.25 text-[15px] tracking-[.2px];
+  }
+
+  .modal .body {
+    @apply px-4.5 py-4 text-[13.5px];
+  }
+
+  .modal .body p {
+    @apply mt-0 mb-2.5;
+  }
+
+  .modal .row {
+    @apply mt-3.5 flex flex-wrap items-center gap-2.5;
+  }
+
+  .modal .err {
+    @apply mt-2.5 mb-0 rounded-btn border border-bad/40 bg-bad-soft px-3 py-2 text-bad;
+  }
+
+  .modal input[type="password"] {
+    @apply w-full min-w-0 rounded-btn border border-line bg-white px-2.5 py-1.75 text-ink;
+  }
+
+  /* The destructive button. It looks different on purpose: the one action that cannot be
+     undone from the page should not look like the one beside it. */
+  .danger {
+    @apply cursor-pointer rounded-btn border border-bad bg-bad px-3 py-1.5 font-semibold text-white;
+  }
+
+  .danger:disabled {
+    @apply cursor-default opacity-70;
+  }
+}
+
+/* Print rules stay as plain CSS: Tailwind cannot express a media query inside
+   `@apply`, and these selectors are about a document, not a component. */
+@media print {
+  header.top,
+  .no-print,
+  .tabs,
+  .toolbar,
+  footer.foot {
+    display: none !important;
+  }
+
+  /* Connection status and error notices are screen-only: on paper they are noise,
+     and the printed list carries its own heading. */
+  #panelLink,
+  #notices {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .panel {
+    box-shadow: none;
+    border: none;
+    margin: 0;
+  }
+
+  .table-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  table.grid {
+    font-size: 10.5px;
+  }
+
+  table.grid thead th {
+    background: #eee !important;
+  }
+}

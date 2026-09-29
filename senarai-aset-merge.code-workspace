@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		// `_headers` is a Cloudflare config file, not Markdown. Its `#` lines are
+		// comments; without this association the Markdown linter reads each one as a
+		// heading and reports ~50 problems per copy (src/static and public).
+		"files.associations": {
+			"_headers": "plaintext"
+		}
+	}
+}

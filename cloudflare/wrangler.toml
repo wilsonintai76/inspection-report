@@ -1,0 +1,73 @@
+# Cloudflare deployment for Laporan Aset Yang Belum Diperiksa - PKS.
+#
+# ONE WORKER, TWO JOBS
+#   /            the app itself, served straight from dist/
+#   /api/*       the JSON API, records stored in D1 (SQLite)
+#
+#   npm run build                      # writes dist/ (index.html included)
+#   npx wrangler d1 create aset-pks    # once; paste the id below
+#   npx wrangler deploy                # tables are created on first use
+#
+# There is no migration step and nothing to install on the client: the D1 tables
+# are created by the Worker the first time the API is called.
+
+name = "aset-pks"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Both the workers.dev URL and the custom domain need this.
+workers_dev = true
+
+# ROLES - reading is public, writing needs a login.
+#
+#   ACCESS_MODE = "password" (CURRENT) The page offers an admin login box - the button a
+#                            reader sees behind "Muat naik". The Worker compares what is
+#                            typed against the ADMIN_PASSWORD secret (constant time) and
+#                            hands back an HttpOnly, signed cookie. Reading stays public.
+#                            Set the secret once, and only you can write:
+#                              npx wrangler secret put ADMIN_PASSWORD --config cloudflare/wrangler.toml
+#                            While the secret is UNSET this mode fails closed: the page
+#                            says login is not configured and every write is refused.
+#   ACCESS_MODE = "enforce"  Cloudflare Access guards /api/admin/*. Only emails in
+#                            ADMIN_EMAILS may write; everyone else, signed in or not,
+#                            reads. This is the mode for a team, because every write can
+#                            be attributed to a person; in "password" mode the audit trail
+#                            can only say "admin".
+#   ACCESS_MODE = "open"     The list is public and READ ONLY: /api/admin/* refuses every
+#                            write because no login is configured, so nobody can change
+#                            records even though the URL is open. The safe default.
+#   ACCESS_MODE = "trusted"  No login at all and everybody is an admin. Only for a
+#                            private copy the internet cannot reach; the page warns.
+#
+# ACCESS_TEAM_DOMAIN and ACCESS_AUD come from the Access application, which must be
+# scoped to the PATH /api/admin - not the whole hostname, or readers would be asked to
+# log in for a public list. Either create it in the dashboard (Zero Trust > Access >
+# Applications) or let `node tools/setup-access.mjs` do it with an API token that may
+# edit Access apps, and it fills in both values for you. They are only used by "enforce".
+#
+# ADMIN_EMAILS is set already, so switching to "enforce" cannot lock the owner out. In
+# "open" and "trusted" it has no effect: nobody is being compared against it. In
+# "password" mode it is only a label for the timeline ("oleh").
+[vars]
+ACCESS_MODE = "password"
+ADMIN_EMAILS = "wilsonintai76@gmail.com"
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""
+
+# Static files. `npm run build` writes public/index.html and nothing else, so a
+# bare `/` is served by the asset handler without waking the Worker, and no test
+# artifact can ever be published. Anything that is not index.html - which means
+# /api/* - falls through to `main`.
+[assets]
+directory = "../public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aset-pks"
+# Created with `npx wrangler d1 create aset-pks` (region APAC).
+database_id = "54614215-c7d2-4a1a-8fee-5fd0fdb233de"
+
+[observability]
+enabled = true
+

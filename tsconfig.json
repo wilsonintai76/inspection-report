@@ -1,0 +1,45 @@
+{
+  /*
+   * tsconfig.json - type checking for the application.
+   *
+   * SCOPE
+   * -----
+   * This covers `src/` only: the React application and the logic it uses. The Node tooling
+   * (`tools/`, `tests/`) and the Worker (`cloudflare/`) stay plain JavaScript - they are
+   * scripts run by Node, not modules bundled for a browser, and their tests already exercise
+   * them directly against real data.
+   *
+   * `src/parser.mjs` also stays JavaScript, because `tools/` and `tests/` import that exact
+   * file: converting it would drag the whole Node side along for no gain in the browser. Its
+   * shape is declared in `src/parser.d.ts`, so everything that consumes it IS checked.
+   *
+   * NO EMIT
+   * -------
+   * Vite does the building (esbuild strips the types); `tsc` is only ever run with
+   * `--noEmit`. That is why `noEmit` and `allowImportingTsExtensions` are set here.
+   */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Strictness: this is the point of the exercise. */
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src"]
+}

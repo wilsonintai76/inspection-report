@@ -1,0 +1,47 @@
+{
+  "name": "laporan-aset-belum-diperiksa-pks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Laporan Aset Yang Belum Diperiksa (PKS) - aplikasi luar talian untuk menggabungkan fail senarai aset, mengesan pertindihan dan konflik, dan mengeksport ke Excel/CSV.",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build-app.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && node tools/check-built-app.mjs",
+    "test": "node tests/run-tests.mjs",
+    "verify": "tsc --noEmit && node tools/check-built-app.mjs && node tests/run-tests.mjs && node tools/build-app.mjs",
+    "scenario": "node tools/scenario-test.mjs",
+    "ui": "node tools/verify-ui.mjs",
+    "storage": "node tools/verify-storage.mjs",
+    "history": "node tools/verify-history.mjs",
+    "assign": "node tools/verify-assign.mjs",
+    "viewer": "node tools/verify-viewer.mjs",
+    "cf:test": "node cloudflare/verify-worker.mjs",
+    "cf:access": "node tools/setup-access.mjs",
+    "cf:smoke": "node tools/verify-deployed.mjs",
+    "cf:dev": "npm run build && wrangler dev --config cloudflare/wrangler.toml",
+    "cf:deploy": "npm run build && wrangler deploy --config cloudflare/wrangler.toml",
+    "cf:tail": "wrangler tail --config cloudflare/wrangler.toml",
+    "cf:d1:create": "wrangler d1 create aset-pks",
+    "inspect": "node tools/mine-expected.mjs",
+    "dev:app": "vite --config vite.config.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.16",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "tailwindcss": "^4.1.16",
+    "typescript": "^7.0.2",
+    "vite": "^7.2.1",
+    "wrangler": "^4.42.0"
+  },
+  "engines": {
+    "//": "Vite 7 needs 20.19+ or 22.12+; the Cloudflare worker tests import node:sqlite, which needs 22.5+.",
+    "node": ">=20.19"
+  }
+}

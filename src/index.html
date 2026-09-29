@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laporan Aset Yang Belum Diperiksa - PKS</title>
+<!--
+  The shell. Everything below this line is a few kilobytes; the application itself
+  arrives as a content-hashed asset that the browser keeps forever. The build moves
+  the script tag to the end of <body> so a verification harness can sit after it.
+
+  data-api is added at deploy time when the page and the API live on different
+  origins; absent means "same origin", which is how the Worker serves it.
+
+  The build rewrites this file twice: Vite replaces the <script> below with a
+  reference to the built asset, then tools/build-app.mjs moves that reference to the
+  end of <body>. The ordering matters - a verification harness must be able to sit
+  AFTER the application, and a fetch stub BEFORE it.
+-->
+<script type="module" src="./main.tsx"></script>
+</head>
+<body>
+<div id="root"></div>
+<!--APP_SCRIPT-->
+</body>
+</html>
+

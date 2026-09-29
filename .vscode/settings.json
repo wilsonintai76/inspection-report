@@ -1,0 +1,9 @@
+{
+  // `_headers` is a Cloudflare config file, not Markdown: its `#` lines are comments.
+  // Without this association the Markdown linter reads every comment line as a heading
+  // and reports ~50 problems for each copy of the file (src/static/_headers and the
+  // public/_headers that `npm run build` writes).
+  "files.associations": {
+    "_headers": "plaintext"
+  }
+}

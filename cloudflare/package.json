@@ -1,0 +1,15 @@
+{
+  "name": "aset-pks-cloudflare",
+  "private": true,
+  "description": "Wrangler pin for the aset-pks Worker. Run these from the repository root instead: npm run cf:dev / cf:deploy / cf:test.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "d1:create": "wrangler d1 create aset-pks",
+    "d1:list": "wrangler d1 list"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}

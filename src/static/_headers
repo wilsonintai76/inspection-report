@@ -1,0 +1,20 @@
+# Cache rules for the deployed assets.
+#
+# Cloudflare's asset handler sends `Cache-Control: public, max-age=0, must-revalidate` for
+# everything. Measured on this deployment, those responses carry NO ETag and no
+# Last-Modified, so with `max-age=0` the browser has nothing to revalidate against and
+# re-downloads the whole file on every visit - which is what the old single-file page did
+# with its 188 KB.
+#
+# The filenames below contain a hash of their own contents, so a given URL can never serve
+# different bytes. That is what makes it safe to say "keep it forever": when the code
+# changes, the filename changes and the browser fetches the new one.
+#
+# The shell keeps the default rule on purpose: it is the file that names the current hashes,
+# so it is the one thing that must always be re-checked.
+#
+# NOTE: Cloudflare parses this file, and its comment character is `#`. A C-style comment
+# here is read as a URL rule followed by malformed headers, and the deploy FAILS - which is
+# how it was discovered.
+/assets/*
+  Cache-Control: public, max-age=31556952, immutable
