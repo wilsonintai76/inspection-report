@@ -26,10 +26,13 @@ import type {
   Notice, OverrideMap, ProgressPoint, StatusSummary, TabName,
 } from '../types';
 import {
-  apiBase, expand, fetchBootstrap, fetchCurrent, fetchHistoryCsvUrl,
+  apiBase, expand, fetchBootstrap, fetchHistoryCsvUrl,
   postObservation, postOverrides, deleteObservation, purgeObservations, postLogin, postLogout,
+  postFigures,
 } from '../lib/api';
 import { historyView, readAsText, sha256Hex, currentRows, buildSummary } from '../lib/compute';
+import { collectDrop, isPicked, pickFromFolderInput } from '../intake';
+import type { PickedFile, SkippedFile } from '../intake';
 import { mountHarness } from '../harness';
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -46,8 +49,12 @@ export interface AppApi {
   dispatchSync: (action: Action) => void;
 
   /* intake */
-  loadFiles: (fileList: FileList | File[], opts?: { quiet?: boolean; append?: boolean }) => Promise<void>;
+  loadFiles: (fileList: FileList | File[] | PickedFile[], opts?: { quiet?: boolean; append?: boolean }) => Promise<void>;
   loadFilesQuiet: (entries: { name: string; text: string; sha?: string }[]) => void;
+  /** A drop anywhere on the page. Handles folders; see src/intake.mjs. */
+  loadDropped: (dataTransfer: DataTransfer | null) => Promise<void>;
+  /** An `<input type="file" webkitdirectory>` pick - one whole folder at a time. */
+  loadFolder: (fileList: FileList | null) => Promise<void>;
 
   /* D1 */
   refresh: (fresh?: boolean) => Promise<boolean>;
@@ -55,6 +62,10 @@ export interface AppApi {
   deleteRun: (id: number | string) => Promise<ActionResult>;
   /** Delete every point in time. The clean slate; the only destructive action here. */
   purgeRuns: () => Promise<ActionResult>;
+  /** Store the admin's own report figures, or clear them with `null`. */
+  setFigures: (figures: {
+    totalAssets: number | null; inspected: number | null; outstanding: number | null;
+  }) => Promise<ActionResult>;
   setOverride: (label: string, bahagian: string) => Promise<ActionResult>;
   clearAllOverrides: () => Promise<ActionResult>;
   dropSuperseded: () => Promise<void>;
@@ -214,15 +225,6 @@ type LoadedData =
       return { ok: false };
     }
     const applied = applyBootstrap(res.body);
-
-    if (res.body.me.role === 'viewer') {
-      // A viewer has no files: their working set comes from D1 instead.
-      const cur = await fetchCurrent(fresh);
-      if (cur.body && cur.body.ok) {
-        dispatchSync({ type: 'SET_VIEWER_LIST', records: expand(cur.body) });
-        dispatchSync({ type: 'D1_PATCH', patch: { current: cur.body } });
-      }
-    }
     return { ok: true, ...applied };
   }, [applyBootstrap, dispatchSync]);
 
@@ -244,7 +246,7 @@ type LoadedData =
     const at = new Date().toISOString();
     const res = await postObservation({
       observedAt: at,
-      source: s.files.map((f) => f.name).join(', '),
+      source: s.files.map((f) => f.path || f.name).join(', '),
       records: s.merged.map((r) => ({
         Label: r.Label,
         'Jenis Aset': r['Jenis Aset'],
@@ -314,6 +316,30 @@ type LoadedData =
       };
     }
     return { ok: true, runs: body.runs, assets: body.assets };
+  }, [loadAll]);
+
+  /**
+   * Store the admin's own figures for the report, or clear them with `null`.
+   *
+   * The page re-reads D1 afterwards instead of patching its own state: the Worker decides
+   * what was stored (it validates, and refuses non-admins), and a report that shows a
+   * number nobody saved is worse than one that shows the previous number a moment longer.
+   */
+  const setFigures = useCallback(async (
+    figures: { totalAssets: number | null; inspected: number | null; outstanding: number | null },
+  ): Promise<ActionResult> => {
+    if (!stateRef.current.d1.up) return { ok: false, reason: 'offline' };
+    const res = await postFigures(figures);
+    const body = res.body;
+    await loadAll(true);
+    if (!(body && body.ok)) {
+      return {
+        ok: false,
+        reason: res.offline ? 'network' : 'rejected',
+        error: (body && body.error) || `HTTP ${res.status}`,
+      };
+    }
+    return { ok: true, figures: body.figures, cleared: body.cleared ? 1 : 0 };
   }, [loadAll]);
 
   /** Set or clear one manual department assignment. */
@@ -428,23 +454,65 @@ type LoadedData =
 
   /* ------------------------------------------------------------------ intake -- */
 
-  /** Read files, fingerprint them, and hand them to the reducer. */
+  /**
+   * Read files, fingerprint them, and hand them to the reducer.
+   *
+   * Takes both shapes the intake produces: a plain FileList/File[] (the file picker, or a
+   * drop with no folder in it) and the `{ file, path }` pairs a folder arrives as. The
+   * path rides along into the state because it is the only thing that tells two
+   * identically named exports from different folders apart.
+   */
   const loadFiles = useCallback(async (
-    fileList: FileList | File[],
+    fileList: FileList | File[] | PickedFile[],
     { quiet = false, append = true }: { quiet?: boolean; append?: boolean } = {},
   ): Promise<void> => {
-    const files = Array.from(fileList);
-    if (!files.length) return;
-    const entries = await Promise.all(files.map(async (f) => {
+    const picked = Array.from(fileList as ArrayLike<File | PickedFile>)
+      .map((value) => (isPicked(value) ? value : { file: value as File, path: '' }));
+    if (!picked.length) return;
+    const entries = await Promise.all(picked.map(async ({ file, path }) => {
       try {
-        const text = await readAsText(f);
-        return { name: f.name, size: f.size, text, sha: await sha256Hex(text) };
+        const text = await readAsText(file);
+        return { name: file.name, path, size: file.size, text, sha: await sha256Hex(text) };
       } catch (err) {
-        return { name: f.name, size: f.size, text: '', error: (err as Error)?.message || String(err) };
+        return {
+          name: file.name, path, size: file.size, text: '', error: (err as Error)?.message || String(err),
+        };
       }
     }));
     dispatchSync({ type: 'LOAD_FILES', entries, append, pendingRun: !quiet });
   }, [dispatchSync]);
+
+  /**
+   * Say what a folder contained that the page did not read.
+   *
+   * A skip that is not reported is indistinguishable from a file that was never in the
+   * folder, and the two lead to opposite conclusions about the numbers that follow.
+   */
+  const reportSkips = useCallback((skipped: SkippedFile[]): void => {
+    if (!skipped.length) return;
+    dispatchSync({ type: 'PUSH_NOTICE', notice: msg.intakeSkipNotice(skipped) });
+  }, [dispatchSync]);
+
+  /**
+   * A drop anywhere on the page: a file, several files, a folder, or several folders.
+   *
+   * `collectDrop` is called synchronously from the drop handler on purpose - it snapshots
+   * the DataTransferItems before its first await, because those items are dead the moment
+   * the handler returns. Awaiting anything before it would silently reintroduce the
+   * "folder is a 0-byte file" failure this exists to fix.
+   */
+  const loadDropped = useCallback(async (dataTransfer: DataTransfer | null): Promise<void> => {
+    const dropped = await collectDrop(dataTransfer);
+    if (dropped.files.length) await loadFiles(dropped.files);
+    reportSkips(dropped.skipped);
+  }, [loadFiles, reportSkips]);
+
+  /** One whole folder, from the picker instead of a drop. */
+  const loadFolder = useCallback(async (fileList: FileList | null): Promise<void> => {
+    const picked = pickFromFolderInput(fileList);
+    if (picked.files.length) await loadFiles(picked.files);
+    reportSkips(picked.skipped);
+  }, [loadFiles, reportSkips]);
 
   /** The seam the suites use: load files WITHOUT letting them become a point in D1. */
   const loadFilesQuiet = useCallback((entries: { name: string; text: string; sha?: string }[]): void => {
@@ -484,14 +552,6 @@ type LoadedData =
         return;
       }
       applyBootstrap(res.body);
-      if (res.body.me && res.body.me.role === 'viewer') {
-        fetchCurrent(false).then((cur) => {
-          if (cur.body && cur.body.ok) {
-            dispatchSync({ type: 'SET_VIEWER_LIST', records: expand(cur.body) });
-            dispatchSync({ type: 'D1_PATCH', patch: { current: cur.body } });
-          }
-        });
-      }
     });
   }, [applyBootstrap, dispatchSync]);
 
@@ -514,9 +574,10 @@ type LoadedData =
      * The effect runs again when `checked` flips, and clears pendingRun once and for all.
      */
     if (!state.d1.checked) return;
-    dispatchSync({ type: 'CLEAR_PENDING_RUN' });
+    // Plain dispatch: a flushSync from inside an effect re-enters Preact's render queue.
+    dispatch({ type: 'CLEAR_PENDING_RUN' });
     if (!state.d1.up) {
-      dispatchSync({ type: 'PUSH_NOTICE', notice: msg.offlineRunNotice() });
+      dispatch({ type: 'PUSH_NOTICE', notice: msg.offlineRunNotice() });
       return;
     }
     recordRun('').then((res) => {
@@ -543,10 +604,13 @@ type LoadedData =
     dispatchSync,
     loadFiles,
     loadFilesQuiet,
+    loadDropped,
+    loadFolder,
     refresh,
     recordRun,
     deleteRun,
     purgeRuns,
+    setFigures,
     setOverride,
     clearAllOverrides,
     dropSuperseded,
@@ -595,8 +659,8 @@ type LoadedData =
       return total;
     },
   }), [
-    dispatchSync, loadFiles, loadFilesQuiet, refresh, recordRun, deleteRun, setOverride,
-    clearAllOverrides, dropSuperseded,
+    dispatchSync, loadFiles, loadFilesQuiet, loadDropped, loadFolder, refresh, recordRun, deleteRun,
+    setOverride, clearAllOverrides, dropSuperseded,
   ]);
 
   /*

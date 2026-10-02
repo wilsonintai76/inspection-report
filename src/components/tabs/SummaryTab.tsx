@@ -24,10 +24,10 @@ export function SummaryTab({ isViewer }: { isViewer: boolean }) {
   const blankCount = groups.filter((g) => g.key === NO_DEPT).reduce((a, g) => a + g.total, 0);
 
   const exportSummary = () => {
-    const cols = ['Bahagian', 'Jumlah Aset', 'Peratus (%)', 'Bilangan Lokasi'];
+    const cols = ['Bahagian', 'Aset Belum Diperiksa', 'Peratus (%)', 'Bilangan Lokasi'];
     const rows = groups.map((g) => ({
       Bahagian: g.label,
-      'Jumlah Aset': g.total,
+      'Aset Belum Diperiksa': g.total,
       'Peratus (%)': grand ? Number(((g.total * 100) / grand).toFixed(1)) : 0,
       'Bilangan Lokasi': Object.keys(g.lokasi).length,
     }));
@@ -42,7 +42,7 @@ export function SummaryTab({ isViewer }: { isViewer: boolean }) {
 
   const columns: GridColumn<DeptGroup>[] = [
     { key: 'dept', label: 'Bahagian', render: (g) => <b>{g.label}</b> },
-    { key: 'total', label: 'Jumlah Aset', num: true, render: (g) => <b>{g.total}</b> },
+    { key: 'total', label: 'Aset Belum Diperiksa', num: true, render: (g) => <b>{g.total}</b> },
     { key: 'pct', label: '%', num: true, render: (g) => `${(grand ? (g.total * 100) / grand : 0).toFixed(1)}%` },
     { key: 'locs', label: 'Bilangan Lokasi', num: true, render: (g) => Object.keys(g.lokasi).length },
     {

@@ -10,7 +10,7 @@
  *   { kind: 'warn' | 'info' | 'ok' | 'bad', title, parts: [fragment] }
  */
 
-import type { ActionResult, Notice, NoticeKind, NoticePart, SourceEntry } from '../types';
+import type { ActionResult, ManualFigures, Notice, NoticeKind, NoticePart, SourceEntry } from '../types';
 
 export const text = (v: string | number): NoticePart => ({ t: 'text', v: String(v) });
 export const bold = (v: string | number): NoticePart => ({ t: 'b', v: String(v) });
@@ -28,7 +28,7 @@ export const notice = (kind: NoticeKind, title: string, parts: NoticePart[] = []
 
 export function parseFailureNotice(failures: SourceEntry[]): Notice {
   return notice('bad', `${failures.length} fail tidak dapat dibaca`,
-    [list(failures.map((f) => [bold(f.name), text(' - '), text(f.parseError || '')]))]);
+    [list(failures.map((f) => [bold(f.path || f.name), text(' - '), text(f.parseError || '')]))]);
 }
 
 export function identicalFilesNotice(groups: string[][]): Notice {
@@ -39,10 +39,41 @@ export function identicalFilesNotice(groups: string[][]): Notice {
   ]);
 }
 
+/**
+ * Files that were inside a folder that was dropped or picked, and were NOT read.
+ *
+ * A skip that is not reported is indistinguishable from a file that was never in the
+ * folder, and the two lead to opposite conclusions about the report.
+ */
+export function intakeSkipNotice(skipped: { path: string; reason: string }[]): Notice {
+  const why: Record<string, string> = {
+    unsupported: 'bukan format jadual yang boleh dibaca',
+    junk: 'fail sistem atau fail tersembunyi',
+    big: 'terlalu besar untuk dibaca',
+    deep: 'folder terlalu dalam',
+    limit: 'melebihi had bilangan fail',
+  };
+
+  const byReason = new Map<string, string[]>();
+  skipped.forEach((s) => {
+    const key = why[s.reason] ? s.reason : 'unsupported';
+    byReason.set(key, (byReason.get(key) || []).concat([s.path]));
+  });
+
+  const items: NoticePart[][] = [];
+  byReason.forEach((paths, reason) => {
+    const shown = paths.slice(0, 3).join(', ') + (paths.length > 3 ? ', ...' : '');
+    items.push([bold(paths.length), text(` x ${why[reason]} - contoh: ${shown}`)]);
+  });
+
+  return notice('info', `${skipped.length} fail dalam folder dilangkau`,
+    [text('Fail berikut ada dalam folder yang dibaca, tetapi tidak digunakan:'), list(items)]);
+}
+
 export function parseNotesNotice(withWarnings: SourceEntry[]): Notice {
   return notice('info', 'Nota penghuraian',
     [list(withWarnings.map((f) => [
-      bold(f.name),
+      bold(f.path || f.name),
       list((f.warnings || []).map((w) => [text(w)])),
     ]))]);
 }
@@ -58,7 +89,8 @@ export const doneNotice = (fileCount: number, recordCount: number): Notice => no
 
 export const offlineRunNotice = (): Notice => notice('warn', 'Tidak dihantar ke D1',
   [text('Tiada sambungan, jadi muat naik ini '), bold('tidak'),
-    text(' direkod sebagai titik masa. Buka halaman ini daripada alamat Worker, kemudian muat naik semula.')]);
+    text(' direkod sebagai titik masa. Buka halaman ini daripada alamat Worker, kemudian'
+      + ' muat naik semula - atau hantar semula dari tab Sejarah Pemeriksaan.')]);
 
 /* -------------------------------------------------------- record-run messages -- */
 
@@ -66,13 +98,13 @@ export function recordRunNotice(res: ActionResult): Notice {
   if (res.ok) {
     const parts = [];
     if (res.runs === 1) {
-      parts.push(`Ini titik masa pertama (${res.summary ? res.summary.outstanding : 0} aset belum diperiksa).`);
+      parts.push(`Ini titik masa pertama (${res.summary ? res.summary.outstandingFile : 0} aset belum diperiksa).`);
     } else if (res.last) {
       parts.push(res.last.inspected
-        ? [bold(res.last.inspected), text(' aset hilang -> dianggap '), bold('sudah diperiksa'), text('.')]
-        : 'Tiada aset hilang sejak titik masa lepas.');
+        ? [bold(res.last.inspected), text(' label hilang daripada senarai terbaharu.')]
+        : 'Tiada label hilang daripada senarai terbaharu.');
       if (res.last.added) parts.push([bold(res.last.added), text(' aset baharu.')]);
-      parts.push([text('Baki belum diperiksa: '), bold(res.summary ? res.summary.outstanding : 0), text('.')]);
+      parts.push([text('Baki belum diperiksa: '), bold(res.summary ? res.summary.outstandingFile : 0), text('.')]);
     }
     return notice('ok', `Titik masa ke-${res.runs} disimpan dalam D1`, parts);
   }
@@ -84,7 +116,8 @@ export function recordRunNotice(res: ActionResult): Notice {
     return notice('info', 'Tiada data', ['Muatkan fail senarai terlebih dahulu.']);
   }
   return notice('bad', 'Muat naik tidak dapat disimpan',
-    [`D1 menolak permintaan itu${res.error ? `: ${res.error}` : ''}. Senarai ini masih boleh digabung dan dieksport.`]);
+    [`D1 menolak permintaan itu${res.error ? `: ${res.error}` : ''}. Senarai ini masih boleh digabung dan dieksport.`,
+      ' Cuba hantar semula dengan butang "+ Hantar senarai ini ke D1" dalam tab Sejarah Pemeriksaan.']);
 }
 
 export function recordRunReport(res: ActionResult): Notice {
@@ -92,14 +125,13 @@ export function recordRunReport(res: ActionResult): Notice {
     const parts: NoticePart[] = [`Titik masa ke-${res.runs} disimpan dalam D1. `];
     if (res.last) {
       if (res.last.inspected) {
-        parts.push([bold(res.last.inspected), text(' aset hilang daripada senarai, jadi dianggap '),
-          bold('sudah diperiksa'), text('. ')]);
+        parts.push([bold(res.last.inspected), text(' label hilang daripada senarai terbaharu. ')]);
       } else if ((res.runs || 0) > 1) {
-        parts.push('Tiada aset yang hilang - tiada pemeriksaan baharu dikesan. ');
+        parts.push('Tiada label yang hilang - senarai baharu sama kandungannya. ');
       }
       if (res.last.added) parts.push([bold(res.last.added), text(' aset baharu muncul. ')]);
     }
-    if (res.summary) parts.push([text('Baki belum diperiksa: '), bold(res.summary.outstanding), text('.')]);
+    if (res.summary) parts.push([text('Baki belum diperiksa: '), bold(res.summary.outstandingFile), text('.')]);
     return notice('ok', 'Pemeriksaan disimpan', parts);
   }
   if (res.reason === 'empty') return notice('info', 'Tiada data', ['Muatkan fail senarai terlebih dahulu.']);
@@ -112,6 +144,58 @@ export function recordRunReport(res: ActionResult): Notice {
   }
   return notice('bad', 'Tidak dapat disimpan', [`D1 menolak permintaan itu${res.error ? `: ${res.error}` : ''}.`]);
 }
+
+/* -------------------------------------------------------- report figures --
+ *
+ * Why the figures message states the arithmetic, including when it does NOT add up: a
+ * report whose three numbers disagree is a real situation (the export and the register are
+ * two different things), so it is said out loud rather than smoothed over - an admin who
+ * sees 17 + 550 under a total of 600 is told about the 33, not left to notice it.
+ */
+
+export function figuresSavedNotice(figures: ManualFigures, fileCount: number): Notice {
+  const { totalAssets: t, inspected: i, outstanding: o } = figures;
+  const parts: NoticePart[] = [];
+  if (t === null && i === null && o === null) {
+    return notice('info', 'Angka daftar dibuang',
+      ['Total aset, sudah diperiksa dan belum diperiksa kembali kosong pada kad. Salin semula daripada ringkasan Sistem Pengurusan Aset Alih apabila sedia.']);
+  }
+  /* The register's own arithmetic first: all three numbers come from ONE ringkasan, so a
+     difference between them is a slip of the pen, not a disagreement between two sources. */
+  if (t !== null && i !== null && o !== null) {
+    const sum = i + o;
+    if (sum === t) {
+      parts.push([text('Angka daftar sepadan: '), bold(i), text(' sudah + '), bold(o),
+        text(' belum = '), bold(t), text('. ')]);
+    } else {
+      parts.push([text('Angka daftar tidak sepadan: '), bold(i), text(' sudah + '), bold(o),
+        text(' belum = '), bold(sum), text(', bukan '), bold(t), text(' - beza '),
+        bold(Math.abs(t - sum)), text(' aset. Semak semula angka yang disalin. ')]);
+    }
+  } else {
+    const missing = [
+      t === null ? 'Total aset' : null,
+      i === null ? 'Sudah diperiksa' : null,
+      o === null ? 'Belum diperiksa' : null,
+    ].filter(Boolean);
+    parts.push([text(`${missing.join(', ')} masih kosong - kad itu menunjukkan "-". `)]);
+  }
+  /* Then the comparison the register figure exists for: SPAA against the uploaded file. */
+  if (o !== null) {
+    const gap = o - fileCount;
+    parts.push(gap === 0
+      ? [text('Fail terakhir menyenaraikan '), bold(fileCount),
+        text(' aset - sama dengan angka SPAA.')]
+      : [text('Fail terakhir menyenaraikan '), bold(fileCount), text(' aset, '),
+        bold(Math.abs(gap)), text(gap > 0
+          ? ' kurang daripada angka SPAA - semak sama ada fail itu senarai penuh (semua bahagian, semua helaian).'
+          : ' lebih daripada angka SPAA - semak sama ada angka itu sudah basi.')]);
+  }
+  return notice('ok', 'Angka daftar dikemas kini', parts);
+}
+
+export const figuresFailedNotice = (error?: string): Notice => notice('bad', 'Angka tidak dapat disimpan',
+  [`D1 menolak perubahan itu${error ? `: ${error}` : ''}.`]);
 
 /* ------------------------------------------------------------ write messages -- */
 
@@ -165,7 +249,7 @@ export const historyCsvOfflineNotice = (): Notice => notice('warn', 'Tiada sambu
 
 export const previewNotice = (on: boolean): Notice => (on
   ? notice('info', 'Pratonton viewer', [
-    'Ini yang dilihat oleh pengguna biasa: tab Senarai Semasa, Ringkasan Bahagian dan Sejarah Pemeriksaan sahaja. Tiada muat naik, tiada padam, tiada tetapan Bahagian.'])
+    'Ini yang dilihat oleh pengguna biasa: tab Senarai Semasa dan Ringkasan Bahagian sahaja. Sejarah Pemeriksaan ialah alat admin - angka daftar, pergerakan antara muat naik dan butang padam semuanya di sana - jadi tiada padam, tiada muat naik dan tiada tab itu untuk pembaca.'])
   : notice('info', 'Kembali ke mod admin', ['Semua tindakan admin dipulihkan.']));
 
 export const loginOkNotice = (email?: string): Notice => notice('ok', 'Log masuk berjaya',

@@ -29,7 +29,10 @@ interface TabDef {
 /** Order matters: the first tab is the one an admin lands on, and the viewer's landing tab. */
 const TAB_DEFS: TabDef[] = [
   { tab: 'summary', id: 'cSum', label: 'Ringkasan Bahagian', countKey: null },
-  { tab: 'history', id: 'cHist', label: 'Sejarah Pemeriksaan', countKey: null },
+  /* Sejarah Pemeriksaan is the ADMIN's tool: it carries the register's figures, the
+     movement between uploads and the destructive buttons behind it. A reader's job is to
+     read the list, so they get no such tab - see where it is rendered below. */
+  { tab: 'history', id: 'cHist', label: 'Sejarah Pemeriksaan', countKey: null, adminOnly: true },
   { tab: 'merged', id: 'cMerged', label: 'Senarai Gabungan', countKey: 'merged', viewerLabel: 'Senarai Semasa', first: true },
   { tab: 'dupes', id: 'cDupes', label: 'Pertindihan', countKey: 'dupes', adminOnly: true },
   { tab: 'conflicts', id: 'cConf', label: 'Konflik Data', countKey: 'conf', adminOnly: true },
@@ -78,14 +81,16 @@ export default function ResultPanel() {
     >      <Cards items={mergedCards(state, isViewer)} id="cards" />
 
       <div className="tabs" role="tablist" id="tabs">
-        {TAB_DEFS.map((t) => (
+        {/* An admin-only tab is NOT RENDERED for a reader, rather than rendered and hidden:
+            a hidden node is still in the DOM, still carries its counter, and is one style
+            mistake away from being visible. The tabs a reader may use are the tabs they get. */}
+        {TAB_DEFS.filter((t) => !(t.adminOnly && isViewer)).map((t) => (
           <button
             type="button"
             role="tab"
             key={t.tab}
             data-tab={t.tab}
             aria-selected={state.tab === t.tab}
-            hidden={!!t.adminOnly && isViewer}
             onClick={() => api.setTab(t.tab)}
           >
             <span className="tabLabel">{isViewer && t.viewerLabel ? t.viewerLabel : t.label}</span>{' '}
@@ -95,7 +100,11 @@ export default function ResultPanel() {
       </div>
 
       <SummaryTab isViewer={isViewer} />
-      <HistoryTab isViewer={isViewer} />
+      {/* HistoryTab is not rendered for a reader at all. Hiding the tab BUTTON while leaving
+          the panel in the DOM would still put the register's figures and the whole movement
+          table one keyboard tab away, and "hidden" is not a permission - the same reason
+          the admin buttons are not rendered either. */}
+      {isViewer ? null : <HistoryTab isViewer={false} />}
       <MergedTab isViewer={isViewer} printHeader={printHeader} />
       <DupesTab />
       <ConflictsTab />

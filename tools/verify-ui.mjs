@@ -162,7 +162,20 @@ const harness = `
     }));
     var payload = JSON.parse(raw);
     window.__uiHarness__.loadFiles(payload.files);
-    out.textContent = JSON.stringify(window.__uiHarness__.snapshot(), null, 1);
+    var snap = window.__uiHarness__.snapshot();
+    /*
+     * Geometry as well as text. A heading that sits over the wrong column is invisible to
+     * every assertion below, and that is exactly what happened when the tables carried
+     * class="grid" and Tailwind's .grid{display:grid} utility split thead and tbody into two
+     * independent grids. The summary tab is opened first: a hidden table measures as zero.
+     */
+    snap.layout = { merged: window.__uiHarness__.tableLayout('#mergedWrap table.data-grid') };
+    (function () {
+      var b = document.querySelector('#tabs button[data-tab="summary"]');
+      if (b) b.click();
+    })();
+    snap.layout.summary = window.__uiHarness__.tableLayout('#summaryWrap table.data-grid');
+    out.textContent = JSON.stringify(snap, null, 1);
     document.documentElement.setAttribute('data-ui-verify', 'done');
   } catch (e) {
     out.textContent = 'UI HARNESS ERROR: ' + (e && e.message);
@@ -333,8 +346,22 @@ check('jadual ringkasan tiada lajur Sumber',
   sum.columns.every((h) => h.indexOf('Sumber') < 0), JSON.stringify(sum.columns));
 check('lajur ringkasan seperti yang dijangka',
   JSON.stringify(sum.columns)
-  === JSON.stringify(['Bahagian', 'Jumlah Aset', '%', 'Bilangan Lokasi', 'Contoh Lokasi']),
+  === JSON.stringify(['Bahagian', 'Aset Belum Diperiksa', '%', 'Bilangan Lokasi', 'Contoh Lokasi']),
   JSON.stringify(sum.columns));
+
+/* ---- the headings must sit over their own columns ----
+ *
+ * A layout assertion, which is the one kind this suite did not have. Both of these tables
+ * used to render with `display: grid` (the table's class was literally `grid`, which
+ * Tailwind scans as its own utility), so the thead and the tbody sized their columns
+ * independently and every heading was offset from the data under it - while every text
+ * assertion above stayed green. */
+for (const name of ['merged', 'summary']) {
+  const lay = snap.layout[name];
+  check(`kepala jadual ${name} sejajar dengan lajur data`,
+    !!lay && lay.display === 'table' && lay.width > 0 && lay.columns > 1 && lay.drift === 0,
+    JSON.stringify(lay));
+}
 
 // The blank-department row must be present exactly when the data has blanks.
 // Recomputed from the Node-side parse, so the expectation is independent.

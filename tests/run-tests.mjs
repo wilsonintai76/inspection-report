@@ -16,6 +16,10 @@ import {
   buildHistory, diffLabels, departmentProgress, historyRows, historyRunRows,
   HISTORY_COLUMNS, HISTORY_RUN_COLUMNS, LABEL_STATUS,
 } from '../src/parser.mjs';
+import {
+  LIMITS, SUPPORTED_EXT, classifyFile, collectDrop, extOf, isSupportedName,
+  pickFromFolderInput, walkEntries,
+} from '../src/intake.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -122,6 +126,47 @@ eq('data table chosen over wrapper tables', mt.records.length, 2);
 eq('labels correct', mt.records.map((r) => r.Label), ['KPT/PKS/H/7/1', 'KPT/PKS/H/7/2']);
 check('wrapper text not emitted',
   mt.records.every((r) => r.Label.indexOf('JABATAN') < 0 && r.Label.indexOf('Jumlah') < 0));
+
+/* ================================================================== *
+ * 3b. Several sheets in ONE file
+ *
+ * An HTML export of a workbook writes each sheet as its own <table>. An upload
+ * IS the whole outstanding list, so reading only the biggest sheet would make
+ * the other sheets look as if their assets had been inspected. Every table whose
+ * header matches the chosen one is therefore read as the same list - and a title
+ * wrapper or summary (different head) is still left out.
+ * ================================================================== */
+section('HTML: one file, several sheets');
+const HEAD_HTML = '<tr><td><b>Label</b></td><td><b>Jenis Aset</b></td><td><b>Pegawai Penempatan</b></td>'
+  + '<td><b>Bahagian</b></td><td><b>Lokasi Terkini</b></td><td><b>Status Aset</b></td></tr>';
+const sheetRow = (n, dept) => `<tr><td>KPT/PKS/H/${n}</td><td>MESIN ${n}</td><td>ALI</td>`
+  + `<td>${dept}</td><td>STOR ${n}</td><td>Sedang Digunakan</td></tr>`;
+const manySheets = '<html><body>'
+  + '<table><tr><td><b>LAPORAN ASET</b></td></tr></table>'
+  + `<table>${HEAD_HTML}${sheetRow('1/1', 'JAB A')}${sheetRow('1/2', 'JAB A')}${sheetRow('1/3', 'JAB A')}</table>`
+  + `<table>${HEAD_HTML}${sheetRow('2/1', 'JAB B')}</table>`
+  + '<table><tr><td>Jumlah</td><td>4</td></tr></table>'
+  + '</body></html>';
+const sheets = parseHtmlTable(manySheets, { engine: 'scan' });
+eq('every sheet is read, not only the biggest', sheets.records.length, 4);
+eq('labels come from both sheets',
+  sheets.records.map((r) => r.Label).sort(), ['KPT/PKS/H/1/1', 'KPT/PKS/H/1/2', 'KPT/PKS/H/1/3', 'KPT/PKS/H/2/1']);
+eq('the second sheet keeps its own Bahagian',
+  sheets.records.filter((r) => r.Bahagian === 'JAB B').length, 1);
+check('the header row of the second sheet is not emitted as an asset',
+  sheets.records.every((r) => r.Label !== 'Label' && r.Label.indexOf('Status') < 0));
+check('no title or summary text leaks in',
+  sheets.records.every((r) => r.Label.indexOf('LAPORAN') < 0 && r.Label.indexOf('Jumlah') < 0));
+
+/* A table with the same first column name but a different shape must NOT be
+   merged: only a header that matches column for column is another sheet. */
+const lookalike = '<html><body>'
+  + `<table>${HEAD_HTML}${sheetRow('3/1', 'JAB C')}</table>`
+  + '<table><tr><td>Label</td><td>Bilangan</td></tr><tr><td>Jumlah</td><td>9</td></tr></table>'
+  + '</body></html>';
+const look = parseHtmlTable(lookalike, { engine: 'scan' });
+eq('a lookalike summary table is not merged', look.records.length, 1);
+eq('its rows stay out', look.records[0].Label, 'KPT/PKS/H/3/1');
 
 section('HTML: comment mentioning a table');
 const withComment = '<!-- Exactly ONE <table> so re-importing is unambiguous. -->'
@@ -680,6 +725,200 @@ section('buildHistory edge cases');
   eq('emptied list reports both inspected', emptied.runs[1].inspected, 2);
   eq('emptied list leaves nothing outstanding', emptied.summary.outstanding, 0);
   eq('emptied list resolves both', emptied.summary.resolved, 2);
+}
+
+/* ================================================================== *
+ * File intake: picking and dropping FOLDERS
+ *
+ * The exports for one report live in a folder per month, so the interesting
+ * question is not "can it read a file" but "which folder did it come from". The
+ * walk is driven with fabricated FileSystemEntries: the browser API cannot be
+ * constructed, and the parts that actually break (the 100-entry batch, the junk
+ * that lives in every export folder) are decisions made in src/intake.mjs.
+ * ================================================================== */
+
+section('intake: what a file name is allowed to be');
+{
+  eq('extension comes from the last segment', extOf('2026-09/ABR.xls'), 'xls');
+  eq('extension is case-insensitive', extOf('ABR.XLS'), 'xls');
+  eq('a dotfile has no extension', extOf('.xls'), '');
+  eq('the supported list is the accept-list on the input', SUPPORTED_EXT,
+    ['xls', 'xlsx', 'html', 'htm', 'csv', 'tsv', 'txt', 'json']);
+  check('xls is supported', isSupportedName('Senarai.xls'));
+  check('png is not', !isSupportedName('gambar.png'));
+  check('a name with no extension is not', !isSupportedName('senarai'));
+  check('a path is judged by its base name', isSupportedName('2026-09/x.csv'));
+
+  eq('office lock file', classifyFile('~$Senarai.xls'), 'junk');
+  eq('macos metadata', classifyFile('2026-09/.DS_Store'), 'junk');
+  eq('windows metadata', classifyFile('desktop.ini'), 'junk');
+  eq('unsupported type', classifyFile('gambar.png'), 'unsupported');
+  eq('a readable file is ok', classifyFile('Senarai.xls'), 'ok');
+  eq('a file over the ceiling is refused', classifyFile('besar.csv', LIMITS.maxFileBytes + 1), 'big');
+  eq('an unknown size is never a reason to skip', classifyFile('Senarai.xls', 0), 'ok');
+}
+
+/*
+ * A directory that hands its children back in batches, the way the real API does: at
+ * most 100 entries per readEntries() call, an empty call at the end, and every callback
+ * asynchronous.
+ */
+const fakeDir = (name, children, batch = 100) => ({
+  name,
+  isDirectory: true,
+  isFile: false,
+  createReader: () => {
+    let at = 0;
+    return {
+      readEntries: (ok) => {
+        const slice = children.slice(at, at + batch);
+        at += slice.length;
+        setTimeout(() => ok(slice), 0);
+      },
+    };
+  },
+});
+
+const fakeFile = (name, size = 100) => ({
+  name,
+  isDirectory: false,
+  isFile: true,
+  file: (ok) => setTimeout(() => ok({ name, size, text: 'x' }), 0),
+});
+
+const pathsOf = (result) => result.files.map((f) => f.path);
+const reasonsOf = (result) => result.skipped.map((s) => `${s.path}:${s.reason}`);
+
+section('intake: walking a dropped folder');
+{
+  const tree = fakeDir('2026-09', [
+    fakeFile('ABR.xls'),
+    fakeFile('HM.xls'),
+    fakeFile('~$ABR.xls'), // the lock file Excel leaves behind
+    fakeFile('.DS_Store'),
+    fakeFile('nota.txt'),
+    fakeFile('gambar.png'),
+    fakeDir('arkib', [fakeFile('LAMA.xls')]),
+  ]);
+  const walked = await walkEntries([tree]);
+  eq('readable files, in tree order, with their folder path', pathsOf(walked), [
+    '2026-09/ABR.xls', '2026-09/HM.xls', '2026-09/nota.txt', '2026-09/arkib/LAMA.xls',
+  ]);
+  eq('every file left behind is accounted for', reasonsOf(walked), [
+    '2026-09/~$ABR.xls:junk', '2026-09/.DS_Store:junk', '2026-09/gambar.png:unsupported',
+  ]);
+  check('a folder that fitted is not truncated', walked.truncated === false);
+
+  /* Chrome returns entries in batches of 100. Stopping at the first batch is a silent
+     data loss that no single-file test can see, so this folder is deliberately larger
+     than one batch. */
+  const many = fakeDir('banyak', Array.from({ length: 250 }, (_, i) => fakeFile(`f${i}.csv`)));
+  const all = await walkEntries([many]);
+  eq('a folder larger than one batch is read completely', all.files.length, 250);
+  eq('and its last file is the last file', all.files[249].path, 'banyak/f249.csv');
+
+  /* The file NAME is not unique. Three month-folders of the same export are all called
+     Senarai.xls, which is the whole reason the path is carried. */
+  const two = await walkEntries([
+    fakeDir('2026-08', [fakeFile('Senarai.xls')]),
+    fakeDir('2026-09', [fakeFile('Senarai.xls')]),
+  ]);
+  eq('the same name in two folders is two files', pathsOf(two),
+    ['2026-08/Senarai.xls', '2026-09/Senarai.xls']);
+
+  const twoMerged = mergeSources([
+    { fileName: pathsOf(two)[0], label: pathsOf(two)[0], warnings: [], records: [{ Label: 'KPT/PKS/H/1/1', 'Jenis Aset': 'A' }] },
+    { fileName: pathsOf(two)[1], label: pathsOf(two)[1], warnings: [], records: [{ Label: 'KPT/PKS/H/1/2', 'Jenis Aset': 'B' }] },
+  ]);
+  eq('and stays two rows in the per-file report', twoMerged.sourceStats.length, 2);
+  check('with two different names to show',
+    twoMerged.sourceStats[0].fileName !== twoMerged.sourceStats[1].fileName);
+
+  const capped = await walkEntries(
+    [fakeDir('besar', Array.from({ length: 30 }, (_, i) => fakeFile(`f${i}.csv`)))],
+    { maxFiles: 5 },
+  );
+  eq('the file ceiling stops the walk', capped.files.length, 5);
+  check('and reports that it did',
+    capped.truncated === true && capped.skipped.some((s) => s.reason === 'limit'), reasonsOf(capped).join(' '));
+
+  const shallow = await walkEntries(
+    [fakeDir('a', [fakeDir('b', [fakeDir('c', [fakeFile('x.csv')])])])],
+    { maxDepth: 2 },
+  );
+  eq('the depth ceiling stops recursion', shallow.files.length, 0);
+  eq('and names the folder it refused', shallow.skipped.map((s) => s.reason), ['deep']);
+
+  /* A tree of files nothing can read must not be crawled entry by entry: the visit
+     ceiling bounds the work even when the file ceiling never triggers. */
+  const wide = await walkEntries(
+    [fakeDir('w', [fakeFile('a.csv'), fakeFile('b.csv'), fakeFile('c.csv')])],
+    { maxVisited: 2 },
+  );
+  check('the visited ceiling stops a huge tree', wide.truncated === true && wide.files.length === 1,
+    `files=${wide.files.length} truncated=${wide.truncated}`);
+}
+
+section('intake: a hand-picked file is judged by the parser, not by the folder rules');
+{
+  const one = await walkEntries([fakeFile('senarai.xls')]);
+  eq('a loose .xls arrives', one.files.map((f) => f.file.name), ['senarai.xls']);
+  eq('and has no folder, so no path', one.files[0].path, '');
+  eq('and nothing is skipped', one.skipped.length, 0);
+
+  /* A file whose extension the parser does not know may still BE a table (the real JKM
+     exports are HTML with an .xls name, and someone will one day save one with no
+     extension). A file the user chose by hand reaches the parser and gets the parser's
+     own message; only a folder walk may filter by name. */
+  const odd = await walkEntries([fakeFile('senarai')]);
+  eq('a loose file with no extension still arrives', odd.files.map((f) => f.file.name), ['senarai']);
+  eq('and is not silently skipped', odd.skipped.length, 0);
+
+  const big = await walkEntries([fakeFile('besar.csv', LIMITS.maxFileBytes + 1)]);
+  eq('but the size ceiling still refuses it', big.skipped.map((s) => s.reason), ['big']);
+}
+
+section('intake: the drop payload');
+{
+  /* Entries are the route that can see inside a folder; `dataTransfer.files` holds a
+     0-byte placeholder for a directory, which is why the walk wins whenever it can. */
+  const withEntries = {
+    items: [{ kind: 'file', webkitGetAsEntry: () => fakeDir('2026-09', [fakeFile('ABR.xls')]) }],
+    files: [{ name: '2026-09', size: 0 }],
+  };
+  const dropped = await collectDrop(withEntries);
+  eq('a dropped folder is expanded', pathsOf(dropped), ['2026-09/ABR.xls']);
+  check('and the entries route is reported', dropped.usedEntries === true);
+
+  const flat = { items: [{ kind: 'file' }], files: [{ name: 'a.xls', size: 10 }] };
+  const plain = await collectDrop(flat);
+  eq('without entries the flat list is used', plain.files.map((f) => f.file.name), ['a.xls']);
+  eq('and a loose file has no folder path', plain.files[0].path, '');
+  check('the flat route is reported', plain.usedEntries === false);
+
+  const none = await collectDrop(null);
+  eq('an empty drop is not an error', none.files.length, 0);
+  eq('and it produced no skips to report', none.skipped.length, 0);
+
+  const link = { items: [{ kind: 'string' }, { kind: 'file', webkitGetAsEntry: () => null }], files: [] };
+  const fromLink = await collectDrop(link);
+  eq('a dragged link contributes nothing', fromLink.files.length, 0);
+}
+
+section('intake: the folder picker');
+{
+  const picked = pickFromFolderInput([
+    { name: 'ABR.xls', size: 10, webkitRelativePath: '2026-09/ABR.xls' },
+    { name: 'gambar.png', size: 10, webkitRelativePath: '2026-09/gambar.png' },
+    { name: '~$ABR.xls', size: 10, webkitRelativePath: '2026-09/~$ABR.xls' },
+  ]);
+  eq('only readable files survive the pick', pathsOf(picked), ['2026-09/ABR.xls']);
+  eq('the rest are reported, not dropped', picked.skipped.map((s) => s.reason), ['unsupported', 'junk']);
+  eq('a file with no relative path falls back to its name',
+    pickFromFolderInput([{ name: 'a.csv', size: 1 }]).files[0].path, 'a.csv');
+  eq('an empty pick is not an error', pickFromFolderInput(null).files.length, 0);
+  eq('the picker filters the same way the drop does',
+    pickFromFolderInput([{ name: 'x.png', size: 1, webkitRelativePath: 'f/x.png' }]).skipped.length, 1);
 }
 
 /* ================================================================== *

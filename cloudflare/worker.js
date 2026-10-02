@@ -92,15 +92,82 @@ async function cachedJson(request, obj, cacheControl) {
   const etag = await strongEtag(body);
   const headers = { ...JSON_HEADERS, ETag: etag, 'Cache-Control': policy };
 
-  const inm = request.headers.get('If-None-Match');
-  if (inm) {
-    const tags = inm.split(',').map((t) => t.trim());
-    if (tags.includes(etag) || tags.includes('*') || tags.includes(`W/${etag}`)) {
-      return new Response(null, { status: 304, headers });
-    }
-  }
+  if (etagMatches(request, etag)) return new Response(null, { status: 304, headers });
   return new Response(body, { status: 200, headers });
 }
+
+function etagMatches(request, etag) {
+  const inm = request.headers.get('If-None-Match');
+  if (!inm) return false;
+  const tags = inm.split(',').map((t) => t.trim());
+  return tags.includes(etag) || tags.includes('*') || tags.includes(`W/${etag}`);
+}
+
+/*
+ * Bump when the SHAPE of any versioned answer changes, so a browser holding the old validator
+ * is not told "304, unchanged" about a body its page can no longer read.
+ */
+const API_REV = 'r2';
+
+/**
+ * One cheap query that changes whenever any stored data a read depends on changes.
+ *
+ * The validator is built from this BEFORE the heavy queries run, so a repeat visit costs this
+ * one query and a bodyless 304 - cachedJson() could only save the bytes, because it had to
+ * run every query and hash the body to know the answer was unchanged. Observation ids are
+ * AUTOINCREMENT, so an upload moves MAX(id) and any delete moves COUNT(*).
+ */
+async function dataVersion(env) {
+  const r = await env.DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(id), 0) FROM observations) AS obs,
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(ditetapkan), '') || ':' || COALESCE(SUM(LENGTH(bahagian)), 0)
+          FROM bahagian_overrides) AS ovr,
+       (SELECT COALESCE(total_assets, '-') || ':' || COALESCE(inspected, '-') || ':'
+               || COALESCE(outstanding, '-') || ':' || updated_at
+          FROM manual_figures WHERE id = 1) AS fig`,
+  ).first();
+  return `${r.obs}|${r.ovr}|${r.fig || ''}`;
+}
+
+/**
+ * A JSON read keyed on `dataVersion`: a matching If-None-Match answers 304 without building
+ * the body at all. `scope` separates answers that differ by caller (bootstrap carries the role).
+ */
+async function versionedJson(request, version, scope, build) {
+  const etag = await strongEtag(`${API_REV}|${scope}|${version}`);
+  const headers = {
+    ...JSON_HEADERS,
+    ETag: etag,
+    'Cache-Control': carriesCredentials(request) ? PRIVATE_CACHE : READ_CACHE,
+  };
+  if (etagMatches(request, etag)) return new Response(null, { status: 304, headers });
+  return new Response(JSON.stringify(await build()), { status: 200, headers });
+}
+
+/* Per-isolate memo keyed by the data version: a figure that only changes with the data is
+   computed once per version, not once per request. WeakMap on the binding so two databases
+   (the test suite uses several) never share an answer. */
+const versionMemo = new WeakMap();
+async function memoByVersion(env, version, name, compute) {
+  if (!version) return compute();
+  let perDb = versionMemo.get(env.DB);
+  if (!perDb) {
+    perDb = new Map();
+    versionMemo.set(env.DB, perDb);
+  }
+  const hit = perDb.get(name);
+  if (hit && hit.version === version) return hit.value;
+  const value = await compute();
+  perDb.set(name, { version, value });
+  return value;
+}
+
+/** Labels ever seen. It scans every stored row, so it is memoised per data version. */
+const distinctLabels = (env, version) => memoByVersion(env, version, 'labels', async () => {
+  const r = await env.DB.prepare('SELECT COUNT(DISTINCT label) AS n FROM observation_assets').first();
+  return (r && r.n) || 0;
+});
 
 /* ------------------------------------------------------------------ compact --
  *
@@ -198,11 +265,48 @@ function ensureSchema(env) {
          bahagian TEXT NOT NULL,
          ditetapkan TEXT NOT NULL,
          oleh TEXT)`,
+      `CREATE TABLE IF NOT EXISTS manual_figures (
+         id INTEGER PRIMARY KEY,
+         total_assets INTEGER,
+         inspected INTEGER,
+         updated_at TEXT NOT NULL,
+         updated_by TEXT)`,
+      /* Per-point movement against the previous point, so /progress is a lookup instead of
+         ~7 set-difference queries per observation. `prev_id` says what it was compared with:
+         a stored row is trusted only while that is still the previous point. */
+      `CREATE TABLE IF NOT EXISTS obs_progress (
+         observation_id INTEGER PRIMARY KEY,
+         prev_id INTEGER,
+         inspected INTEGER NOT NULL,
+         added INTEGER NOT NULL,
+         dept_json TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS dept_closed (
+         bahagian TEXT PRIMARY KEY,
+         closed_at TEXT NOT NULL,
+         after_obs INTEGER NOT NULL DEFAULT 0,
+         oleh TEXT)`,
+      /* NOTE: `dept_closed` is no longer read or written - the table above is only still
+         DECLARED so that databases created by the earlier per-department release keep
+         running unchanged. That rule was removed by the user's decision: the list in an
+         upload IS the whole outstanding list, so a finished department simply stops
+         appearing in it and needs no flag. Dropping a table on boot is riskier than leaving
+         one that nothing touches. */
       'CREATE INDEX IF NOT EXISTS idx_oa_label ON observation_assets(label)',
       'CREATE INDEX IF NOT EXISTS idx_oa_obs ON observation_assets(observation_id)',
       'CREATE INDEX IF NOT EXISTS idx_obs_at ON observations(observed_at)',
     ];
     for (const sql of statements) await env.DB.prepare(sql).run();
+
+    /* `manual_figures` gained `outstanding` (the register's own "belum diperiksa") after the
+       release that first stored figures, and CREATE TABLE IF NOT EXISTS cannot add a column
+       to a table that already exists - so it is added here instead of in a migration file.
+       The check is what makes it idempotent: a database that already has the column, or one
+       created fresh by the statement above, does nothing. */
+    const cols = await env.DB.prepare('PRAGMA table_info(manual_figures)').all();
+    const names = (cols.results || []).map((c) => c.name);
+    if (names.length && !names.includes('outstanding')) {
+      await env.DB.prepare('ALTER TABLE manual_figures ADD COLUMN outstanding INTEGER').run();
+    }
     })()
       .catch((err) => {
         schemaReady.delete(env.DB);
@@ -302,16 +406,15 @@ async function recordObservation(env, payload, receivedBy) {
    * It used to compare the set of labels, which got two cases the wrong way round: a
    * corrected export (same assets, one Bahagian fixed in the source) was refused as
    * "the same list" so the correction could never land, while an asset whose details had
-   * changed was treated as no change at all. What the user actually means by "I already
-   * uploaded this" is "byte-for-byte the same snapshot".
+   * changed was treated as no change at all. What the user means by "I already uploaded
+   * this" is "byte-for-byte the same list".
    */
   if (prev) {
     const prevRows = await env.DB.prepare(
       `SELECT label, jenis_aset, pegawai, bahagian, lokasi
          FROM observation_assets WHERE observation_id = ?`,
     ).bind(prev.id).all();
-    const previous = snapshotFingerprint(prevRows.results || []);
-    if (previous === snapshotFingerprint(cleaned)) {
+    if (snapshotFingerprint(prevRows.results || []) === snapshotFingerprint(cleaned)) {
       return {
         status: 409,
         body: {
@@ -374,7 +477,7 @@ async function recordObservation(env, payload, receivedBy) {
 /**
  * Compare this observation with the previous one.
  * "Inspected" is inferred from a label DISAPPEARING, which is the only signal the
- * source report provides.
+ * source report provides - and it is trustworthy only because the upload IS the whole list.
  */
 async function computeDeltas(env, obsId, labels) {
   const prev = await env.DB.prepare(
@@ -466,39 +569,149 @@ async function listOverrides(env) {
   return { count: overrides.length, overrides };
 }
 
-/* ------------------------------------------------------------------ reads -- */
+/* --------------------------------------------------------- manual figures --
+ *
+ * The numbers an admin copies from the register, and the one that comes from the file.
+ *
+ * An upload decides what is still OUTSTANDING in the EXPORT - that is a fact about one file.
+ * But "total aset", "sudah diperiksa" and the register's own "belum diperiksa" are claims
+ * about the whole REGISTER (ringkasan Sistem Pengurusan Aset Alih), and the register is the
+ * authority, not the export. An export that misses a department - or that still lists an
+ * asset the office already wrote off - would otherwise make every figure in the report wrong,
+ * with no way to correct it. So all three are stored by hand, are admin-only, and SURVIVE a
+ * new upload: a correction is a decision, not an observation.
+ *
+ * `outstanding` is the one that makes an upload CHECKABLE: the page shows the register's
+ * figure beside the file's own count, so a file that is not the whole list is visible as a
+ * gap instead of quietly becoming the report. The register's three figures must also add up
+ * (total = inspected + outstanding) - unlike the file, they all come from the same source, so
+ * a difference there is a typo.
+ *
+ * One row, id = 1. No row means "nothing typed in".
+ */
+const FIGURE_MAX = 10000000;
 
-async function status(env) {
-  const counts = await env.DB.prepare(
-    `SELECT
-       (SELECT COUNT(*) FROM observations) AS runs,
-       (SELECT MIN(observed_at) FROM observations) AS first,
-       (SELECT MAX(observed_at) FROM observations) AS last,
-       (SELECT COUNT(DISTINCT label) FROM observation_assets) AS total`,
+async function readFigures(env) {
+  const row = await env.DB.prepare(
+    'SELECT total_assets, inspected, outstanding, updated_at, updated_by FROM manual_figures WHERE id = 1',
   ).first();
+  if (!row) {
+    return {
+      totalAssets: null, inspected: null, outstanding: null, updatedAt: null, updatedBy: '',
+    };
+  }
+  const num = (v) => (v === null || v === undefined ? null : Number(v));
+  return {
+    totalAssets: num(row.total_assets),
+    inspected: num(row.inspected),
+    outstanding: num(row.outstanding),
+    updatedAt: row.updated_at || null,
+    updatedBy: row.updated_by || '',
+  };
+}
 
-  const total = counts.total || 0;
-  if (!total) {
-    return { observations: 0, assets: 0, outstanding: 0, inspected: 0, departments: [] };
+/** A whole number in range, `null` for "not set", or an error naming the field. */
+function figureValue(raw, name) {
+  if (raw === null || raw === undefined || raw === '') return { ok: true, value: null };
+  const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isSafeInteger(n) || n < 0 || n > FIGURE_MAX) {
+    return { ok: false, error: `${name} mesti nombor bulat antara 0 dan ${FIGURE_MAX}.` };
+  }
+  return { ok: true, value: n };
+}
+
+/**
+ * Store or clear the admin's figures.
+ *
+ * Clearing all three is a real outcome, not an error: it means "trust the data again", so
+ * the row goes and the date of the last update falls back to the newest upload. Clearing
+ * one of them is allowed too - the others stay in force.
+ */
+async function writeFigures(env, payload, oleh) {
+  const body = payload || {};
+  const total = figureValue(body.totalAssets, 'Total aset');
+  if (!total.ok) return { body: { ok: false, error: total.error }, status: 400 };
+  const inspected = figureValue(body.inspected, 'Sudah diperiksa');
+  if (!inspected.ok) return { body: { ok: false, error: inspected.error }, status: 400 };
+  const outstanding = figureValue(body.outstanding, 'Belum diperiksa (SPAA)');
+  if (!outstanding.ok) return { body: { ok: false, error: outstanding.error }, status: 400 };
+
+  if (total.value === null && inspected.value === null && outstanding.value === null) {
+    await env.DB.prepare('DELETE FROM manual_figures WHERE id = 1').run();
+    return {
+      body: { ok: true, cleared: true, figures: await readFigures(env) },
+      status: 200,
+    };
   }
 
-  // The newest observation defines what is still outstanding.
-  const newest = await env.DB.prepare(
-    'SELECT id FROM observations ORDER BY observed_at DESC, id DESC LIMIT 1',
-  ).first();
-  const outstandingRows = await env.DB.prepare(
-    'SELECT label, bahagian FROM observation_assets WHERE observation_id = ?',
-  ).bind(newest.id).all();
-  const outstanding = (outstandingRows.results || []).length;
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO manual_figures
+       (id, total_assets, inspected, outstanding, updated_at, updated_by)
+     VALUES (1, ?, ?, ?, ?, ?)`,
+  ).bind(total.value, inspected.value, outstanding.value,
+    new Date().toISOString(), oleh || '').run();
 
-  const deptMap = {};
-  (outstandingRows.results || []).forEach((r) => {
-    const d = (r.bahagian && r.bahagian.trim()) ? r.bahagian : NO_DEPT;
-    deptMap[d] = (deptMap[d] || 0) + 1;
-  });
-  const departments = Object.entries(deptMap)
-    .map(([bahagian, bilangan]) => ({ bahagian, bilangan }))
-    .sort((a, b) => b.bilangan - a.bilangan);
+  return { body: { ok: true, figures: await readFigures(env) }, status: 200 };
+}
+
+/* ------------------------------------------------------- what an upload IS --
+ *
+ * THE LIST IS THE REPORT. Every uploaded file is the complete list of assets that are still
+ * NOT yet inspected, which is what the source system exports. So an upload does not need to
+ * be merged with anything: it REPLACES the current list, and the assets that are no longer
+ * in it are the ones that were inspected since the last time.
+ *
+ * A department-scoped rule was tried here (an upload replacing only the departments it
+ * mentions) and was REMOVED by the user's decision: their exports are slices - a department's
+ * assets can be spread over several sheets and files, and some rows carry no Bahagian at all
+ * - so "this department's complete list" is not something the server can trust a single file
+ * to be. The rule that cannot be wrong is the simple one: upload everything, get the new
+ * list. The old points in time stay in D1, so a wrong upload can be deleted and the previous
+ * list comes back (see the Sejarah tab's Padam).
+ */
+
+/* ------------------------------------------------------------------ reads -- */
+
+/**
+ * `current` is the answer of currentList() when the caller already has it (bootstrap does),
+ * so the newest list is read once instead of twice. `version` lets the all-rows distinct
+ * count be memoised.
+ */
+async function status(env, current, version) {
+  const [counts, total, manual] = await Promise.all([
+    env.DB.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM observations) AS runs,
+         (SELECT MIN(observed_at) FROM observations) AS first,
+         (SELECT MAX(observed_at) FROM observations) AS last`,
+    ).first(),
+    distinctLabels(env, version),
+    readFigures(env),
+  ]);
+
+  if (!total) {
+    /* The figures are still reported with no observations at all: an admin may set the
+       register total before the first upload, and the report should show it. */
+    return { observations: 0, assets: 0, outstanding: 0, inspected: 0, departments: [], manual };
+  }
+
+  let outstanding;
+  let departments;
+  if (current && current.id !== null) {
+    outstanding = current.assets;
+    departments = current.departments;
+  } else {
+    // The newest observation IS the current list: the whole report, not a slice of it.
+    const newest = await env.DB.prepare(
+      'SELECT id FROM observations ORDER BY observed_at DESC, id DESC LIMIT 1',
+    ).first();
+    const groups = await env.DB.prepare(
+      `SELECT COALESCE(NULLIF(TRIM(bahagian), ''), ?) AS bahagian, COUNT(*) AS bilangan
+         FROM observation_assets WHERE observation_id = ? GROUP BY 1`,
+    ).bind(NO_DEPT, newest.id).all();
+    departments = sortDepartments(groups.results || []);
+    outstanding = departments.reduce((sum, d) => sum + d.bilangan, 0);
+  }
 
   return {
     observations: counts.runs,
@@ -510,16 +723,21 @@ async function status(env) {
     progressPercent: Math.round(((total - outstanding) * 100 / total) * 10) / 10,
     reappeared: 0,
     departments,
+    manual,
   };
 }
+
+/** Biggest first; the name breaks ties so every endpoint lists equal departments alike. */
+const sortDepartments = (list) => list
+  .map((d) => ({ bahagian: d.bahagian, bilangan: d.bilangan }))
+  .sort((a, b) => b.bilangan - a.bilangan || a.bahagian.localeCompare(b.bahagian));
 
 /**
  * The list as it stands: every asset in the newest observation, with its details.
  *
- * This is what a viewer reads, and it is the newest observation by definition - the
- * report only ever lists assets that have NOT been inspected yet. It exists as its
- * own endpoint because the alternative (filtering /api/history) ships every label
- * ever seen, which grows forever, to answer a question about today.
+ * This is what a viewer reads. The report only ever lists assets that have NOT been
+ * inspected yet, so the newest upload IS the current list - which is why this is one query
+ * against one observation rather than a merge of the whole timeline.
  */
 async function currentList(env) {
   const newest = await env.DB.prepare(
@@ -550,12 +768,24 @@ async function currentList(env) {
     id: newest.id,
     observedAt: newest.observed_at,
     assets: records.length,
-    departments: Object.entries(deptMap)
-      .map(([bahagian, bilangan]) => ({ bahagian, bilangan }))
-      .sort((a, b) => b.bilangan - a.bilangan),
+    departments: sortDepartments(Object.entries(deptMap)
+      .map(([bahagian, bilangan]) => ({ bahagian, bilangan }))),
     ...compact(CURRENT_FIELDS, records),
   };
 }
+
+/** What the caller may know about themselves. Never the admin list. */
+const meOf = (identity) => ({
+  role: identity.role,
+  email: identity.email,
+  mode: identity.mode,
+  accessConfigured: identity.accessConfigured,
+  adminsConfigured: identity.adminsConfigured,
+  passwordConfigured: identity.passwordConfigured,
+  loginMethod: identity.loginMethod,
+  writeAllowed: identity.role === 'admin',
+  adminLoginPath: `${ADMIN_PATH}/login`,
+});
 
 /**
  * Everything the page needs to become useful in ONE round trip.
@@ -565,42 +795,36 @@ async function currentList(env) {
  * trips and five separate D1 conversations before a reader saw a single asset. The
  * queries inside this handler run in parallel, so the reader waits for the slowest
  * one instead of for their sum.
+ *
+ * Only an admin is sent `progress` and `history`. They are the two expensive answers (one
+ * scans every stored row), and the Sejarah tab that shows them is the admin's alone - a
+ * reader used to download 900 KB of it and never see a pixel.
  */
-async function bootstrap(env, identity, request) {
-  const [health, st, cur, prog, hist, ovr] = await Promise.all([
-    env.DB.prepare(
-      `SELECT (SELECT COUNT(*) FROM observations) AS observations,
-              (SELECT COUNT(DISTINCT label) FROM observation_assets) AS assets`,
-    ).first(),
-    status(env),
-    currentList(env),
-    progress(env),
-    historyRows(env),
+async function bootstrap(env, identity, version) {
+  const admin = identity.role === 'admin';
+  const cur = currentList(env);
+  const [current, st, prog, hist, ovr] = await Promise.all([
+    cur,
+    cur.then((c) => status(env, c, version)),
+    admin ? progress(env) : null,
+    admin ? historyRows(env) : null,
     listOverrides(env),
   ]);
 
-  return {
+  const body = {
     ok: true,
-    me: {
-      role: identity.role,
-      email: identity.email,
-      mode: identity.mode,
-      accessConfigured: identity.accessConfigured,
-      adminsConfigured: identity.adminsConfigured,
-      passwordConfigured: identity.passwordConfigured,
-      loginMethod: identity.loginMethod,
-      writeAllowed: identity.role === 'admin',
-      adminLoginPath: `${ADMIN_PATH}/login`,
-    },
-    health: { observations: health.observations || 0, assets: health.assets || 0, db: 'd1' },
+    me: meOf(identity),
+    health: { observations: st.observations || 0, assets: st.assets || 0, db: 'd1' },
     status: st,
-    current: cur,
-    progress: { progress: prog.progress },
-    history: { count: hist.length, ...compact(HISTORY_FIELDS, hist) },
+    current,
     overrides: ovr,
   };
+  if (admin) {
+    body.progress = { progress: prog.progress };
+    body.history = { count: hist.length, ...compact(HISTORY_FIELDS, hist) };
+  }
+  return body;
 }
-
 async function observations(env) {
   const rows = await env.DB.prepare(
     'SELECT * FROM observations ORDER BY observed_at DESC, id DESC',
@@ -631,6 +855,7 @@ async function deleteObservation(env, id) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM observation_assets WHERE observation_id = ?').bind(id),
     env.DB.prepare('DELETE FROM dept_snapshots WHERE observation_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM obs_progress WHERE observation_id = ?').bind(id),
     env.DB.prepare('DELETE FROM observations WHERE id = ?').bind(id),
   ]);
   return { status: 200, body: { ok: true, deleted: id } };
@@ -655,6 +880,7 @@ async function purgeObservations(env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM observation_assets'),
     env.DB.prepare('DELETE FROM dept_snapshots'),
+    env.DB.prepare('DELETE FROM obs_progress'),
     env.DB.prepare('DELETE FROM observations'),
   ]);
   return {
@@ -685,11 +911,11 @@ async function observationMembers(env, id) {
 /**
  * Exact per-department movement between one observation and the previous one.
  *
- * The department SNAPSHOTS only hold counts, so they cannot say how many of a
- * department's assets were actually inspected - a department that lost 5 and gained
- * 5 looks identical to one that lost 10 and gained 10. The set difference is
- * computed here from the labels themselves, because the page reports these numbers
- * as facts and an approximation would quietly overstate progress.
+ * The department SNAPSHOTS only hold counts, so they cannot say how many of a department's
+ * assets were actually inspected - a department that lost 5 and gained 5 looks identical to
+ * one that lost 10 and gained 10. The set difference is computed here from the labels
+ * themselves, because the page reports these numbers as facts and an approximation would
+ * quietly overstate progress.
  *
  * Blank Bahagian is bucketed as NO_DEPT, exactly like the app's summary.
  */
@@ -746,52 +972,70 @@ async function deptProgress(env, obsId, prevId) {
 }
 
 async function progress(env) {
-  const runs = await env.DB.prepare(
-    'SELECT id, observed_at, assets FROM observations ORDER BY observed_at, id',
-  ).all();
+  const [runs, stored, snaps] = await Promise.all([
+    env.DB.prepare('SELECT id, observed_at, assets FROM observations ORDER BY observed_at, id').all(),
+    env.DB.prepare('SELECT observation_id, prev_id, inspected, added, dept_json FROM obs_progress').all(),
+    env.DB.prepare(
+      'SELECT observation_id, bahagian, bilangan FROM dept_snapshots ORDER BY observation_id, bilangan DESC',
+    ).all(),
+  ]);
   const list = runs.results || [];
-  const out = [];
-  for (let i = 0; i < list.length; i += 1) {
-    const o = list[i];
-    const prev = i > 0 ? list[i - 1] : null;
-    let inspected = 0;
-    let added = 0;
-    if (prev) {
-      const g = await env.DB.prepare(
-        `SELECT COUNT(*) AS c FROM observation_assets b
-         WHERE b.observation_id = ?
-           AND NOT EXISTS (SELECT 1 FROM observation_assets c
-                           WHERE c.observation_id = ? AND c.label = b.label)`,
-      ).bind(prev.id, o.id).first();
-      const a = await env.DB.prepare(
-        `SELECT COUNT(*) AS c FROM observation_assets c
-         WHERE c.observation_id = ?
-           AND NOT EXISTS (SELECT 1 FROM observation_assets b
-                           WHERE b.observation_id = ? AND b.label = c.label)`,
-      ).bind(o.id, prev.id).first();
-      inspected = g.c || 0;
-      added = a.c || 0;
+  const kept = new Map((stored.results || []).map((r) => [r.observation_id, r]));
+  const deptsOf = new Map();
+  (snaps.results || []).forEach((r) => {
+    if (!deptsOf.has(r.observation_id)) deptsOf.set(r.observation_id, []);
+    deptsOf.get(r.observation_id).push({ bahagian: r.bahagian, bilangan: r.bilangan });
+  });
+
+  /* The set-difference against the previous point is the expensive part, so it is stored
+     once per point. A stored row only counts while `prev_id` is still the point before it:
+     deleting a point in the middle changes that, and the row is simply recomputed. */
+  const moves = await Promise.all(list.map(async (o, i) => {
+    const prevId = i > 0 ? list[i - 1].id : null;
+    const hit = kept.get(o.id);
+    if (hit && (hit.prev_id ?? null) === prevId) {
+      return {
+        inspected: hit.inspected, added: hit.added, deptProgress: JSON.parse(hit.dept_json), fresh: false,
+      };
     }
-    const depts = await env.DB.prepare(
-      'SELECT bahagian, bilangan FROM dept_snapshots WHERE observation_id = ? ORDER BY bilangan DESC',
-    ).bind(o.id).all();
-    out.push({
+    const moved = await deptProgress(env, o.id, prevId);
+    return {
+      inspected: moved.reduce((n, d) => n + d.inspected, 0),
+      added: moved.reduce((n, d) => n + d.added, 0),
+      deptProgress: moved,
+      fresh: true,
+    };
+  }));
+
+  const writes = [];
+  const out = list.map((o, i) => {
+    const prev = i > 0 ? list[i - 1] : null;
+    const m = moves[i];
+    if (m.fresh) {
+      writes.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO obs_progress (observation_id, prev_id, inspected, added, dept_json)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).bind(o.id, prev ? prev.id : null, m.inspected, m.added, JSON.stringify(m.deptProgress)));
+    }
+    return {
       id: o.id,
       observedAt: o.observed_at,
       assets: o.assets,
       previous: prev ? prev.assets : null,
-      inspected,
-      added,
+      inspected: m.inspected,
+      added: m.added,
       percent: prev && prev.assets
-        ? Math.round((inspected * 100 / prev.assets) * 10) / 10
+        ? Math.round((m.inspected * 100 / prev.assets) * 10) / 10
         : null,
-      departments: depts.results || [],
-      deptProgress: await deptProgress(env, o.id, prev ? prev.id : null),
-    });
-  }
+      departments: deptsOf.get(o.id) || [],
+      deptProgress: m.deptProgress,
+    };
+  });
+
+  // A failed cache write must not fail the read it was meant to speed up.
+  if (writes.length) await env.DB.batch(writes).catch(() => {});
   return { progress: out };
 }
-
 /**
  * One asset's history: which observations listed it, and which did not.
  *
@@ -818,6 +1062,7 @@ async function timeline(env, label) {
     'SELECT * FROM observation_assets WHERE label = ? ORDER BY observation_id DESC LIMIT 1',
   ).bind(label).first();
   const absent = all.filter((d) => !present.includes(d));
+  /* Outstanding means "in the current list", and the current list IS the newest upload. */
   const outstanding = present.length > 0 && all.length > 0
     && present[present.length - 1] === all[all.length - 1];
 
@@ -838,53 +1083,50 @@ async function timeline(env, label) {
 }
 
 async function historyRows(env) {
-  const runs = await env.DB.prepare(
-    'SELECT id, observed_at FROM observations ORDER BY observed_at, id',
-  ).all();
+  /* One row per label, aggregated by D1: the Worker used to pull EVERY stored row (one per
+     label per upload, 125k at 30 uploads) just to count and take a min and max. `ord` is a
+     point's position in time order, so first/last/seen survive an out-of-order observed_at.
+     The details shown are the latest sighting's - the column is called "Lokasi Terkini". */
+  const [runs, agg] = await Promise.all([
+    env.DB.prepare('SELECT id, observed_at FROM observations ORDER BY observed_at, id').all(),
+    env.DB.prepare(
+      `WITH ranked AS (
+         SELECT id, ROW_NUMBER() OVER (ORDER BY observed_at, id) AS ord FROM observations),
+       seen AS (
+         SELECT oa.label AS label, COUNT(*) AS n, MIN(r.ord) AS first_ord, MAX(r.ord) AS last_ord
+           FROM observation_assets oa JOIN ranked r ON r.id = oa.observation_id
+          GROUP BY oa.label)
+       SELECT s.label, s.n, s.first_ord, s.last_ord, a.jenis_aset, a.bahagian, a.lokasi
+         FROM seen s
+         JOIN ranked r2 ON r2.ord = s.last_ord
+         JOIN observation_assets a ON a.label = s.label AND a.observation_id = r2.id`,
+    ).all(),
+  ]);
   const all = runs.results || [];
   if (!all.length) return [];
 
-  const membership = await env.DB.prepare(
-    'SELECT observation_id, label, jenis_aset, bahagian, lokasi FROM observation_assets',
-  ).all();
-
-  const byLabel = new Map();
-  const orderOf = new Map(all.map((r, i) => [r.id, i]));
-  (membership.results || []).forEach((m) => {
-    if (!byLabel.has(m.label)) {
-      byLabel.set(m.label, { label: m.label, jenis: m.jenis_aset, dept: m.bahagian, lok: m.lokasi, seen: [] });
-    }
-    const e = byLabel.get(m.label);
-    e.seen.push(orderOf.get(m.observation_id));
-  });
-
-  const lastIdx = all.length - 1;
-  const rows = [];
-  for (const e of byLabel.values()) {
-    e.seen.sort((a, b) => a - b);
-    const first = e.seen[0];
-    const last = e.seen[e.seen.length - 1];
-    const outstanding = e.seen.includes(lastIdx);
-    rows.push({
+  const total = all.length;
+  const rows = (agg.results || []).map((e) => {
+    const outstanding = e.last_ord === total;
+    return {
       Label: e.label,
-      'Jenis Aset': e.jenis || '',
-      Bahagian: e.dept || '',
-      'Lokasi Terkini': e.lok || '',
-      'Pertama Dilihat': String(all[first].observed_at).slice(0, 10),
-      'Terakhir Dilihat': String(all[last].observed_at).slice(0, 10),
-      'Kali Dilihat': e.seen.length,
-      'Kali Hilang': (lastIdx + 1) - e.seen.length,
+      'Jenis Aset': e.jenis_aset || '',
+      Bahagian: e.bahagian || '',
+      'Lokasi Terkini': e.lokasi || '',
+      'Pertama Dilihat': String(all[e.first_ord - 1].observed_at).slice(0, 10),
+      'Terakhir Dilihat': String(all[e.last_ord - 1].observed_at).slice(0, 10),
+      'Kali Dilihat': e.n,
+      'Kali Hilang': total - e.n,
       'Muncul Semula': 0,
       Status: outstanding ? STATUS_OUTSTANDING : STATUS_INSPECTED,
-    });
-  }
+    };
+  });
   rows.sort((a, b) => {
     if (a.Status !== b.Status) return a.Status === STATUS_OUTSTANDING ? -1 : 1;
     return a.Label.localeCompare(b.Label);
   });
   return rows;
 }
-
 /** CSV with a UTF-8 BOM and CRLF, so Excel opens it correctly. */
 function toCsv(rows) {
   if (!rows.length) return '\uFEFF';
@@ -1341,47 +1583,51 @@ async function handle(request, env) {
     /* Every read below is cacheable (see cachedJson). They all carry an ETag, so a
        repeat request is answered with 304 and no body, and a shared cache is allowed
        to hold them for a few seconds. Writes never come through here. */
+    /* The versioned reads answer 304 from one cheap query (see dataVersion). */
+    const version = await dataVersion(env);
     if (route === '/bootstrap') {
-      return cachedJson(request, await bootstrap(env, identity, request));
+      const me = meOf(identity);
+      return versionedJson(request, version, `bootstrap|${JSON.stringify(me)}`,
+        () => bootstrap(env, identity, version));
     }
     if (route === '/me') {
       // Never returns the admin list: a viewer has no business knowing who the
       // admins are, and the page does not need it.
-      return cachedJson(request, {
-        ok: true,
-        role: identity.role,
-        email: identity.email,
-        mode: identity.mode,
-        accessConfigured: identity.accessConfigured,
-        adminsConfigured: identity.adminsConfigured,
-        passwordConfigured: identity.passwordConfigured,
-        loginMethod: identity.loginMethod,
-        writeAllowed: identity.role === 'admin',
-        adminLoginPath: `${ADMIN_PATH}/login`,
-      });
+      return cachedJson(request, { ok: true, ...meOf(identity) });
     }
     if (route === '/health') {
-      const c = await env.DB.prepare(
-        `SELECT (SELECT COUNT(*) FROM observations) AS observations,
-                (SELECT COUNT(DISTINCT label) FROM observation_assets) AS assets`,
-      ).first();
+      const [c, assets] = await Promise.all([
+        env.DB.prepare('SELECT COUNT(*) AS observations FROM observations').first(),
+        distinctLabels(env, version),
+      ]);
       return cachedJson(request, {
-        ok: true, observations: c.observations || 0, assets: c.assets || 0, db: 'd1',
+        ok: true, observations: c.observations || 0, assets, db: 'd1',
       });
     }
-    if (route === '/status') return cachedJson(request, { ok: true, ...(await status(env)) });
-    if (route === '/current') return cachedJson(request, { ok: true, ...(await currentList(env)) });
+    if (route === '/status') {
+      return versionedJson(request, version, 'status',
+        async () => ({ ok: true, ...(await status(env, null, version)) }));
+    }
+    if (route === '/current') {
+      return versionedJson(request, version, 'current',
+        async () => ({ ok: true, ...(await currentList(env)) }));
+    }
     if (route === '/overrides') {
-      return cachedJson(request, { ok: true, ...(await listOverrides(env)) });
+      return versionedJson(request, version, 'overrides',
+        async () => ({ ok: true, ...(await listOverrides(env)) }));
     }
     if (route === '/observations') {
-      return cachedJson(request, { ok: true, ...(await observations(env)) });
+      return versionedJson(request, version, 'observations',
+        async () => ({ ok: true, ...(await observations(env)) }));
     }
-    if (route === '/progress') return cachedJson(request, { ok: true, ...(await progress(env)) });
+    if (route === '/progress') {
+      return versionedJson(request, version, 'progress',
+        async () => ({ ok: true, ...(await progress(env)) }));
+    }
     if (route === '/history') {
-      const rows = await historyRows(env);
-      return cachedJson(request, {
-        ok: true, count: rows.length, ...compact(HISTORY_FIELDS, rows),
+      return versionedJson(request, version, 'history', async () => {
+        const rows = await historyRows(env);
+        return { ok: true, count: rows.length, ...compact(HISTORY_FIELDS, rows) };
       });
     }
     if (route === '/export.csv') {
@@ -1433,11 +1679,11 @@ async function handle(request, env) {
   }
 
   if (method === 'POST') {
-    if (route !== '/observations' && route !== '/overrides') {
+    if (route !== '/observations' && route !== '/overrides' && route !== '/figures') {
       return fail(404, 'Laluan tidak dijumpai.');
     }
-    // Uploading a list and changing department assignments are the two things that
-    // define the records, so both are admin-only.
+    // Uploading a list, changing department assignments and typing in the report's own
+    // figures are the three things that define the records, so all are admin-only.
     const denied = denyWrite(identity);
     if (denied) return denied;
     const len = Number(request.headers.get('Content-Length') || 0);
@@ -1455,6 +1701,10 @@ async function handle(request, env) {
     if (route === '/overrides') {
       const entries = payload && payload.overrides !== undefined ? payload.overrides : payload;
       const res = await setOverrides(env, entries, who);
+      return json(res.body, res.status);
+    }
+    if (route === '/figures') {
+      const res = await writeFigures(env, payload, identity.email || who);
       return json(res.body, res.status);
     }
     const res = await recordObservation(env, payload, who);

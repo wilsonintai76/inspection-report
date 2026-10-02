@@ -34,6 +34,18 @@ export function fakeApiScript(payload) {
   if (me.loginMethod === undefined) me.loginMethod = me.mode === 'enforce' ? 'access' : 'none';
   if (me.passwordConfigured === undefined) me.passwordConfigured = !!payload.adminPassword;
 
+  /* The figures an admin writes by hand. The stub STORES them, so a suite can prove the
+     page shows what was saved (after a real re-read of the API) rather than echoing back
+     what was typed - and that both the date and the arithmetic follow from them. */
+  var figures = Object.assign(
+    { totalAssets: null, inspected: null, outstanding: null, updatedAt: null, updatedBy: '' },
+    payload.status.manual || {},
+  );
+
+  function statusBody() {
+    return Object.assign({ ok: true }, payload.status, { manual: figures });
+  }
+
   /* The real Worker proves the role from a signed cookie. A file:// page cannot keep
      cookies, and the suite is testing the PAGE, so a flag stands in for the session -
      and canWrite() is read fresh on every call, so logging in changes it. */
@@ -53,10 +65,11 @@ export function fakeApiScript(payload) {
     'Terakhir Dilihat', 'Kali Dilihat', 'Kali Hilang', 'Muncul Semula', 'Status'];
   function currentBody() {
     var cur = payload.current || {};
+    var records = (cur.records || []);
     var out = { ok: true, id: cur.id === undefined ? 1 : cur.id,
-      observedAt: cur.observedAt || null, assets: cur.assets || 0,
+      observedAt: cur.observedAt || null, assets: records.length,
       departments: cur.departments || [] };
-    return Object.assign(out, compact(CURRENT_FIELDS, cur.records || []));
+    return Object.assign(out, compact(CURRENT_FIELDS, records));
   }
   function reply(status, obj) {
     var text = JSON.stringify(obj);
@@ -99,7 +112,7 @@ export function fakeApiScript(payload) {
         ok: true,
         me: Object.assign({ writeAllowed: canWrite() }, me),
         health: { observations: payload.status.observations, assets: payload.status.assets, db: 'd1' },
-        status: Object.assign({ ok: true }, payload.status),
+        status: statusBody(),
         current: currentBody(),
         progress: { ok: true, progress: payload.progress },
         history: Object.assign({ ok: true, count: payload.history.length },
@@ -133,7 +146,7 @@ export function fakeApiScript(payload) {
         error: why === 403 ? 'Akaun ini hanya boleh membaca.'
           : 'Log masuk diperlukan untuk mengubah rekod.' });
     }
-    if (path === '/api/status') return reply(200, Object.assign({ ok: true }, payload.status));
+    if (path === '/api/status') return reply(200, statusBody());
     if (path === '/api/progress') return reply(200, { ok: true, progress: payload.progress });
     if (path === '/api/history') {
       return reply(200, Object.assign({ ok: true, count: payload.history.length },
@@ -166,6 +179,32 @@ export function fakeApiScript(payload) {
         return reply(207, out);
       }
       return reply(200, out);
+    }
+    /* The report's own three figures (copied from the register). Blank clears, and null on
+       ALL THREE means "trust the data again" - the same contract the Worker has, arithmetic
+       check included. (No backticks in here: this whole stub is inside one template
+       literal.) */
+    if (path === '/api/figures' && method === 'POST') {
+      var one = function (x) {
+        if (x === null || x === undefined || x === '') return null;
+        var n = Number(x);
+        return Number.isFinite(n) && n >= 0 ? Math.round(n) : NaN;
+      };
+      var t = one(body && body.totalAssets);
+      var i = one(body && body.inspected);
+      var o = one(body && body.outstanding);
+      if (Number.isNaN(t) || Number.isNaN(i) || Number.isNaN(o)) {
+        return reply(400, { ok: false, error: 'Angka mesti nombor bulat 0 atau lebih.' });
+      }
+      if (t === null && i === null && o === null) {
+        figures = { totalAssets: null, inspected: null, outstanding: null,
+          updatedAt: null, updatedBy: '' };
+        return reply(200, { ok: true, cleared: true, figures: figures });
+      }
+      /* A fixed stamp, so a suite can assert the card without depending on the clock. */
+      figures = { totalAssets: t, inspected: i, outstanding: o,
+        updatedAt: '2026-03-01T09:30:00Z', updatedBy: me.email || 'admin' };
+      return reply(200, { ok: true, figures: figures });
     }
     if (path === '/api/observations' && method === 'POST') {
       store.posts.push(body);

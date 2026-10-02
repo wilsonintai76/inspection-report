@@ -26,14 +26,14 @@ export function ConflictsTab() {
         {!state.conflicts.length ? (
           <Empty>Tiada konflik data - semua label yang bertindih mempunyai butiran yang sama.</Empty>
         ) : (
-          <table className="grid">
+          <table className="data-grid">
             <tbody>
               {state.conflicts.map((c) => (
                 <tr key={`${c.label}-${c.fileName}`}>
                   <td colSpan={4} style={{ background: '#f6f9fd' }}>
                     <b>{c.label}</b>{' '}
                     <span className="note">&middot; nilai berbeza dalam <b>{c.fileName}</b></span>
-                    <table className="grid" style={{ marginTop: 8 }}>
+                    <table className="data-grid" style={{ marginTop: 8 }}>
                       <thead>
                         <tr>
                           <th>Medan</th>

@@ -14,6 +14,7 @@
 
 import type {
   ApiCurrent, ApiResult, AssetRecord, BootstrapBody, CompactOrRecords,
+  ManualFigures,
 } from '../types';
 
 /** The API origin, or null when there is nothing to talk to. */
@@ -118,7 +119,10 @@ export interface WriteResult {
   inspected?: number;
   rejected?: { label: string; bahagian: string }[];
   set?: number;
-  cleared?: number;
+  cleared?: number | boolean;
+  /** The figures the Worker now holds, as it stored them. */
+  figures?: ManualFigures;
+  outstanding?: number;
   /** The purge answer: how much was thrown away, and what was deliberately kept. */
   runs?: number;
   overridesKept?: boolean;
@@ -136,6 +140,16 @@ export const postOverrides = (entries: { label: string; bahagian: string }[]) =>
 
 export const deleteObservation = (id: number | string) =>
   apiDelete<WriteResult>(`/api/admin/observations/${encodeURIComponent(id)}`);
+
+/**
+ * Store the admin's own figures for the report, or clear them with `null`.
+ *
+ * `null` on both means "trust the data again" - the Worker removes the row and the derived
+ * counts come back. The Worker refuses this for anybody who is not an admin, exactly like
+ * the other writes.
+ */
+export const postFigures = (figures: { totalAssets: number | null; inspected: number | null }) =>
+  apiPost<WriteResult>('/api/admin/figures', figures);
 
 /**
  * Delete EVERY point in time - the clean slate, and the only destructive call here.

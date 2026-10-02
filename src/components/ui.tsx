@@ -1,12 +1,12 @@
 /*
  * ui.jsx - the primitives every screen is built from.
  *
- * The old page had six places that each assembled a <table class="grid"> by hand, with
+ * The old page had six places that each assembled a <table class="data-grid"> by hand, with
  * their own header strings, their own row loops and their own empty states. They are one
  * component here, which is most of why this file exists: a column definition is now data,
  * and adding one cannot forget the empty state or the numeric alignment.
  *
- * The class names are deliberate - `.notice.warn`, `.card .k`, `table.grid`, `.pill`,
+ * The class names are deliberate - `.notice.warn`, `.card .k`, `table.data-grid`, `.pill`,
  * `.note`, `.spacer` - because the verification suites select on them and because they
  * say more in the markup than the utilities they are built from.
  */
@@ -126,12 +126,27 @@ export const Cards = ({ items, id, style, className = 'cards' }: {
   className?: string;
 }) => (
   <div className={className} id={id} style={style}>
-    {items.map((c, i) => (
-      <div className={`card ${c.cls || ''}`} key={i}>
+    {items.map((c, i) => (c.onClick ? (
+      /*
+       * A pressable card is a real <button>, not a div with a click handler: it is
+       * reachable by Tab and pressed with Enter or Space, and a reader is told it can be
+       * pressed. The box keeps the card's own colour (amber "still outstanding", green at
+       * zero), so the button inside it is a HIT AREA (.card-btn) and not a second look.
+       */
+      <div className={`card clickable ${c.cls || ''}`} key={i}>
+        <button type="button" className="card-btn" id={c.id} title={c.title} onClick={c.onClick}>
+          <span className="k block">{c.k}</span>
+          <span className="v block">{c.v}</span>
+          {c.sub ? <span className="sub block">{c.sub}</span> : null}
+        </button>
+      </div>
+    ) : (
+      <div className={`card ${c.cls || ''}`} key={i} id={c.id}>
         <div className="k">{c.k}</div>
         <div className="v">{c.v}</div>
+        {c.sub ? <div className="sub">{c.sub}</div> : null}
       </div>
-    ))}
+    )))}
   </div>
 );
 
@@ -167,7 +182,7 @@ export function DataGrid<T extends object>({
 }: DataGridProps<T>) {
   if (!rows.length && empty) return <Empty>{empty}</Empty>;
   return (
-    <table className="grid">
+    <table className="data-grid">
       <thead>
         <tr>
           {columns.map((c, i) => (

@@ -22,7 +22,8 @@ export default function Header({ isViewer, onDemo }: HeaderProps) {
           ['Langkah 2: pilih kunci padanan pertindihan dan tapisan.'],
           ['Langkah 3: semak tab ', { t: 'b', v: 'Pertindihan' }, ' dan ', { t: 'b', v: 'Konflik Data' }, ', kemudian eksport ke Excel.'],
         ]),
-        'Semua proses berlaku dalam pelayar anda sahaja - fail tidak dimuat naik ke internet.',
+        'Gabungan, tapisan dan eksport berlaku di dalam pelayar anda - fail asal tidak ke mana-mana.',
+        ' Tetapi muat naik oleh admin dihantar ke D1 supaya senarai itu dikongsi dengan semua pengguna.',
       ]),
     }]);
     const box = document.getElementById('notices');

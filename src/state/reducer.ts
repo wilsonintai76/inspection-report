@@ -16,8 +16,28 @@ import type { ApplyOverridesResult } from '../lib/compute';
 import * as msg from './notices';
 import type {
   Action, AppState, AssetRecord, ConflictGroup, Notice, OverrideMap, OverrideReport, SourceEntry,
-  SourceStat,
+  SourceStat, TabName,
 } from '../types';
+
+/**
+ * The tabs a reader has no business seeing.
+ *
+ * Sejarah Pemeriksaan is the admin's tool: it carries the register's three figures, the
+ * movement between uploads and - behind the same tab - the delete buttons. A reader's job is
+ * to read the list.
+ */
+const ADMIN_ONLY_TABS: TabName[] = ['history'];
+
+/**
+ * Which tab the page may actually point at.
+ *
+ * A role can change while a tab is open (an admin logs out, or flips the preview toggle), and
+ * a page left pointing at a tab that no longer exists shows an EMPTY panel - which reads as
+ * "the page is broken" rather than "that is not your view". Falling back to the list is what
+ * makes the tab genuinely absent for a reader.
+ */
+const readerTab = (tab: TabName, role: string, preview: boolean): TabName =>
+  ((role === 'viewer' || preview) && ADMIN_ONLY_TABS.includes(tab) ? 'merged' : tab);
 
 export const initialState: AppState = {
   /* ---- files and the merge of them (admin side) ---- */
@@ -163,6 +183,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'LOAD_FILES': {
       const entries: SourceEntry[] = action.entries.map((e) => ({
         name: e.name,
+        path: e.path || '',
         size: e.size !== undefined ? e.size : String(e.text || '').length,
         text: e.text,
         sha: e.sha || '',
@@ -251,8 +272,10 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'D1_PATCH':
       return { ...state, d1: { ...state.d1, ...action.patch } };
 
-    case 'ME_PATCH':
-      return { ...state, me: { ...state.me, ...action.patch } };
+    case 'ME_PATCH': {
+      const me = { ...state.me, ...action.patch };
+      return { ...state, me, tab: readerTab(state.tab, me.role, state.preview) };
+    }
 
     /** D1's assignment map changed: re-apply it to the merge already in memory. */
     case 'SET_OVERRIDE_MAP': {
@@ -303,8 +326,10 @@ export function reducer(state: AppState, action: Action): AppState {
 
     /* ---- role preview ---- */
 
-    case 'TOGGLE_PREVIEW':
-      return { ...state, preview: action.value === undefined ? !state.preview : !!action.value };
+    case 'TOGGLE_PREVIEW': {
+      const preview = action.value === undefined ? !state.preview : !!action.value;
+      return { ...state, preview, tab: readerTab(state.tab, state.me.role, preview) };
+    }
 
     default:
       return state;

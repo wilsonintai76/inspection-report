@@ -91,6 +91,13 @@ export function parseAndMerge(files: SourceEntry[], keyStrategy: string): ParseA
 
   files.forEach((entry) => {
     const next: SourceEntry = { ...entry, ok: false, records: [], warnings: [], meta: {}, parseError: null };
+    /*
+     * How this file is NAMED from here on: its path inside the folder it came from, when
+     * it had one. Two exports both called "Senarai_Aset.xls" from different month-folders
+     * are two different sources, and the per-file report, the overlap list and the
+     * conflict report all have to say so - by name alone they were indistinguishable.
+     */
+    const label = next.path || next.name;
     if (next.error) {
       next.parseError = next.error;
       failures.push(next);
@@ -98,14 +105,14 @@ export function parseAndMerge(files: SourceEntry[], keyStrategy: string): ParseA
       return;
     }
     try {
-      const parsed = parseFile(next.text, next.name, { name: next.name });
+      const parsed = parseFile(next.text, next.name, { name: label });
       next.records = parsed.records;
       next.warnings = parsed.warnings || [];
       next.meta = parsed.meta || {};
       next.ok = true;
       sources.push({
-        fileName: next.name,
-        label: next.name,
+        fileName: label,
+        label,
         records: next.records,
         warnings: next.warnings,
         meta: next.meta,
@@ -122,7 +129,7 @@ export function parseAndMerge(files: SourceEntry[], keyStrategy: string): ParseA
   enriched.forEach((f) => {
     if (!f.sha) return;
     byHash[f.sha] = byHash[f.sha] || [];
-    byHash[f.sha].push(f.name);
+    byHash[f.sha].push(f.path || f.name);
   });
   const identicalGroups = Object.keys(byHash)
     .filter((h) => byHash[h].length > 1)
@@ -334,6 +341,31 @@ export interface HistoryViewInput {
   progress: ProgressPoint[];
 }
 
+/** The later of two ISO stamps, ignoring the ones that are missing or unreadable. */
+function laterStamp(a: string | null | undefined, b: string | null | undefined): string | null {
+  const at = a ? Date.parse(String(a)) : NaN;
+  const bt = b ? Date.parse(String(b)) : NaN;
+  if (Number.isFinite(at) && Number.isFinite(bt)) return bt > at ? String(b) : String(a);
+  if (Number.isFinite(bt)) return String(b);
+  if (Number.isFinite(at)) return String(a);
+  return null;
+}
+
+/**
+ * Split a stored timestamp for a card: the date read large, the time small under it.
+ *
+ * The stamp is SLICED, not re-rendered in local time, because that is what the rest of
+ * the report does: the timeline table above these cards prints `String(at).slice(0, 16)`.
+ * Formatting one of them locally would let the same moment read as two different times on
+ * one screen.
+ */
+export function stampParts(value: string | null | undefined): { date: string; time: string } {
+  const raw = String(value || '');
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+  if (m) return { date: m[1], time: m[2] };
+  return { date: raw.slice(0, 10) || '-', time: '' };
+}
+
 /**
  * The history view model, built from what D1 reports.
  *
@@ -360,15 +392,34 @@ export function historyView({ status, progress }: HistoryViewInput): HistoryView
       prevAt: prev ? prev.observedAt : null,
     };
   });
+  /*
+   * The register's headline figures, and ONLY from the admin: the uploads cannot answer
+   * them. An uploaded file is the list of assets still outstanding, so it says nothing about
+   * how many assets the institution holds, how many have been inspected, or how many the
+   * register says are still outstanding - those come from the ringkasan of Sistem Pengurusan
+   * Aset Alih. Until somebody copies them in, the report says so instead of guessing.
+   *
+   * `outstanding` (the register's) and `outstandingFile` (the newest upload's own count) are
+   * both here: the first is the report's figure, the second is what the upload is CHECKED
+   * against, and a gap between them is the whole point of storing the third number.
+   */
+  const manual = status.manual
+    || { totalAssets: null, inspected: null, outstanding: null, updatedAt: null, updatedBy: '' };
+  const has = (v: number | null | undefined): v is number => v !== null && v !== undefined;
   return {
     runs,
     summary: {
       runs: status.observations,
-      outstanding: status.outstanding,
-      resolved: status.inspected,
+      outstandingFile: status.outstanding,
       reappeared: 0,
       first: status.first,
       last: status.last,
+      total: has(manual.totalAssets) ? Number(manual.totalAssets) : null,
+      resolved: has(manual.inspected) ? Number(manual.inspected) : null,
+      outstanding: has(manual.outstanding) ? Number(manual.outstanding) : null,
+      derived: { total: status.assets, inspected: status.inspected },
+      updatedAt: laterStamp(status.last, manual.updatedAt),
+      updatedBy: manual.updatedBy || '',
     },
   };
 }
@@ -398,14 +449,86 @@ export function printHeaderParts(
   };
 }
 
+/**
+ * The register's headline cards: total, outstanding, inspected, and when it last changed.
+ *
+ * One builder for the admin's Sejarah tab and the viewer's headline row, so the two cannot
+ * drift apart. `admin` adds the tooltips (they quote the system's own derived counts and tell
+ * the admin what to copy) and `onOutstanding` makes the outstanding card pressable.
+ */
+export function registerCards(
+  h: HistoryView,
+  opts: { admin?: boolean; onOutstanding?: () => void } = {},
+): CardSpec[] {
+  const { total: regTotal, resolved: regInspected, outstanding: regOutstanding, outstandingFile: fileCount } = h.summary;
+  const fileGap = regOutstanding === null ? 0 : regOutstanding - fileCount;
+  const shown = regOutstanding === null ? fileCount : regOutstanding;
+  const updated = stampParts(h.summary.updatedAt);
+  const tip = (text: string): string | undefined => (opts.admin ? text : undefined);
+  return [
+    {
+      k: 'Total aset',
+      v: regTotal === null ? '\u2013' : regTotal,
+      sub: regTotal === null ? 'belum ditetapkan' : 'angka daftar',
+      title: tip(regTotal === null
+        ? `Angka daftar belum disalin. Kiraan sistem (setiap label yang pernah dilihat D1): ${h.summary.derived.total}.`
+        : `Daripada ringkasan Sistem Pengurusan Aset Alih. Kiraan sistem: ${h.summary.derived.total}.`),
+    },
+    {
+      k: 'Aset belum diperiksa',
+      /* The register's figure leads when set, with the file's own count beside it; without it
+         the file's count is still the truth about the list, labelled as such. */
+      v: shown,
+      cls: regOutstanding !== null && fileGap ? 'warn' : (shown ? 'good' : ''),
+      sub: regOutstanding === null
+        ? 'dari fail'
+        : (fileGap ? `SPAA \u00b7 fail: ${fileCount}` : 'SPAA \u00b7 fail sepadan'),
+      id: opts.onOutstanding ? 'cardOutstanding' : undefined,
+      onClick: opts.onOutstanding,
+      title: tip(regOutstanding === null
+        ? 'Kiraan senarai yang dimuat naik. Salin angka SPAA "belum diperiksa" untuk membandingkannya.'
+        : `Angka ringkasan Sistem Pengurusan Aset Alih. Fail terakhir menyenaraikan ${fileCount} aset.`),
+    },
+    {
+      k: 'Sudah diperiksa',
+      v: regInspected === null ? '\u2013' : regInspected,
+      cls: regInspected === null ? '' : 'good',
+      sub: regInspected === null ? 'belum ditetapkan' : 'angka daftar',
+      title: tip(regInspected === null
+        ? `Angka daftar belum disalin. Kiraan sistem (label yang hilang daripada senarai terakhir): ${h.summary.derived.inspected}.`
+        : `Daripada ringkasan Sistem Pengurusan Aset Alih. Kiraan sistem: ${h.summary.derived.inspected}.`),
+    },
+    {
+      k: 'Peratus pemeriksaan selesai',
+      /* Register figures only: a percentage of a number the register never said would be a guess. */
+      v: regTotal && regInspected !== null ? `${((regInspected * 100) / regTotal).toFixed(1)}%` : '\u2013',
+      sub: regTotal && regInspected !== null ? 'sudah diperiksa \u00f7 total aset' : 'belum ditetapkan',
+      title: tip('Sudah diperiksa \u00f7 Total aset \u00d7 100%, daripada angka daftar yang disalin admin.'),
+    },
+    {
+      k: 'Kemas kini terakhir',
+      v: updated.date,
+      cls: 'date',
+      sub: updated.time ? `jam ${updated.time}` : '',
+      title: tip('Muat naik terakhir atau pindaan angka manual, yang mana lebih baru.'),
+    },
+  ];
+}
+
 /** Cards above the list: a viewer reads D1, an admin reads the merge. */
 export function mergedCards(state: AppState, isViewer: boolean): CardSpec[] {
   if (isViewer) {
     const c = state.d1.current;
     const assets = (c && c.assets) || 0;
+    const departments: CardSpec = { k: 'Bahagian terlibat', v: ((c && c.departments) || []).length };
+    const h = historyView({ status: state.d1.status, progress: state.d1.progress });
+    if (h) {
+      const [total, outstanding, inspected, percent, updated] = registerCards(h);
+      return [total, outstanding, inspected, percent, departments, updated];
+    }
     return [
       { k: 'Aset belum diperiksa', v: assets, cls: assets ? 'warn' : 'good' },
-      { k: 'Bahagian terlibat', v: ((c && c.departments) || []).length },
+      departments,
       { k: 'Kemas kini terakhir', v: c && c.observedAt ? String(c.observedAt).slice(0, 10) : '-' },
     ];
   }

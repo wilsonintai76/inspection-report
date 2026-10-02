@@ -13,6 +13,7 @@ public/
 #   contoh-output/   a real merged 536-asset list, despite the "Contoh" in its name
 #   docs/*.png       screenshots of the real list, where staff names are legible
 #   data/            durable records exported from D1
+#   backup/          CSV copies of live D1 lists, taken before a purge
 #
 # NOTE: src/App.tsx carries a five-row DEMO dataset and tests/run-tests.mjs hard-codes a
 # few expectations quoted from the fixture. Those are staff names as well. They are here
@@ -22,6 +23,7 @@ fixture/
 contoh-output/
 docs/*.png
 data/
+backup/
 
 # wrangler and its local scratch state
 node_modules/

@@ -119,7 +119,7 @@ export default function AssignPanel({ hidden, isViewer }: { hidden?: boolean; is
             <>
               <h3 className="section-title">Perlu ditetapkan ({unassigned.length})</h3>
               <div className="table-scroll max-h-[44vh]">
-                <table className="grid">
+                <table className="data-grid">
                   <thead>
                     <tr>
                       <th>Label</th><th>Jenis Aset</th><th>Lokasi Terkini</th><th>Bahagian</th>
@@ -135,7 +135,7 @@ export default function AssignPanel({ hidden, isViewer }: { hidden?: boolean; is
                           <select
                             data-assign={r.Label}
                             value=""
-                            onChange={(e) => setOne(r.Label, e.target.value)}
+                            onChange={(e) => setOne(r.Label, e.currentTarget.value)}
                           >
                             <option value="">&mdash; pilih bahagian &mdash;</option>
                             {departments.map((d) => (
@@ -160,7 +160,7 @@ export default function AssignPanel({ hidden, isViewer }: { hidden?: boolean; is
             <>
               <h3 className="section-title">Ditetapkan secara manual ({assigned.length})</h3>
               <div className="table-scroll max-h-[30vh]">
-                <table className="grid">
+                <table className="data-grid">
                   <thead>
                     <tr>
                       <th>Label</th><th>Bahagian dalam fail</th><th>Ditetapkan kepada</th>

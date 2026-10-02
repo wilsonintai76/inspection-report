@@ -427,7 +427,7 @@ function detectHeaderPrefix(cells) {
  * Emits a `null` row-break sentinel at every </tr> so downstream grouping can
  * use the document's real row boundaries. When a cell never closes, its capture
  * stops at the next cell or row boundary, mirroring browser markup repair.
- * Returns { cells, headerTexts }.
+ * Returns { cells, headerTexts, otherTables }.
  */
 function scanHtmlTableParts(text) {
   // Comments are removed BEFORE looking for <table> so that a comment which
@@ -443,37 +443,19 @@ function scanHtmlTableParts(text) {
   const tableRe = /<table\b[^>]*>([\s\S]*?)<\/table\s*>/gi;
   let tb;
   while ((tb = tableRe.exec(source)) !== null) blocks.push(tb[1]);
-  const scope = blocks.length
+  const chosen = blocks.length
     ? blocks.reduce((best, b) => (countCells(b) > countCells(best) ? b : best), blocks[0])
     : source;
 
-  const cellRe = /<(t[dh])\b[^>]*?(?:\/>|>([\s\S]*?)(?=<\/t[dh]\s*>|<\/tr\s*>|<t[dh]\b|<tr\b|$))(?:<\/t[dh]\s*>)?/gi;
-  const rowBreakRe = /<\/tr\s*>/gi;
   const cells = [];
   const thTexts = [];
-
-  // Walk cells and row-closing tags together, in document order, so each cell
-  // lands inside the correct row bucket.
-  const events = [];
-  let m;
-  while ((m = cellRe.exec(scope)) !== null) {
-    events.push({ at: m.index, kind: 'cell', tag: m[1].toLowerCase(), value: cleanText(m[2] ?? '') });
-    if (m.index === cellRe.lastIndex) cellRe.lastIndex += 1; // zero-width guard
-  }
-  while ((m = rowBreakRe.exec(scope)) !== null) {
-    events.push({ at: m.index, kind: 'rowbreak' });
-  }
-  events.sort((a, b) => a.at - b.at || (a.kind === 'rowbreak' ? -1 : 1));
-
-  for (const ev of events) {
-    if (ev.kind === 'rowbreak') {
-      // Collapse runs of row breaks into a single sentinel.
-      if (cells.length && cells[cells.length - 1] !== null) cells.push(null);
-      continue;
-    }
-    cells.push(ev.value);
-    if (ev.tag === 'th') thTexts.push(ev.value);
-  }
+  blockRows(chosen, (row) => {
+    row.forEach((c) => {
+      cells.push(c.value);
+      if (c.tag === 'th') thTexts.push(c.value);
+    });
+    cells.push(null);
+  });
 
   // Prefer an explicit <th> header when it maps onto known columns.
   let header = thTexts.length && matchHeaderRow(thTexts) ? thTexts : null;
@@ -485,7 +467,52 @@ function scanHtmlTableParts(text) {
     if (len > 0) header = cells.slice(0, len);
   }
 
-  return { cells, headerTexts: header };
+  // Every other table in the file, so the caller can decide which of them are
+  // more sheets of this same list (see parseHtmlTable).
+  const otherTables = [];
+  blocks.forEach((b) => {
+    if (b === chosen) return;
+    const rows = [];
+    blockRows(b, (row) => rows.push(row));
+    if (rows.length) otherTables.push(rows);
+  });
+
+  return { cells, headerTexts: header, otherTables };
+}
+
+/**
+ * Walk one table block's cells and row breaks in document order, calling `emit`
+ * once per row. Rows with no cells are dropped; a cell that never closes stops
+ * at the next cell or row boundary, mirroring browser markup repair.
+ * @param {string} block raw markup of one <table>
+ * @param {(row: {value: string, tag: string}[]) => void} emit one row at a time
+ */
+function blockRows(block, emit) {
+  const cellRe = /<(t[dh])\b[^>]*?(?:\/>|>([\s\S]*?)(?=<\/t[dh]\s*>|<\/tr\s*>|<t[dh]\b|<tr\b|$))(?:<\/t[dh]\s*>)?/gi;
+  const rowBreakRe = /<\/tr\s*>/gi;
+
+  // Cells and row-closing tags are collected together, then sorted by position,
+  // so each cell lands inside the correct row bucket.
+  const events = [];
+  let m;
+  while ((m = cellRe.exec(block)) !== null) {
+    events.push({ at: m.index, kind: 'cell', tag: m[1].toLowerCase(), value: cleanText(m[2] ?? '') });
+    if (m.index === cellRe.lastIndex) cellRe.lastIndex += 1; // zero-width guard
+  }
+  while ((m = rowBreakRe.exec(block)) !== null) {
+    events.push({ at: m.index, kind: 'rowbreak' });
+  }
+  events.sort((a, b) => a.at - b.at || (a.kind === 'rowbreak' ? -1 : 1));
+
+  let row = [];
+  for (const ev of events) {
+    if (ev.kind === 'rowbreak') {
+      if (row.length) { emit(row); row = []; }
+      continue;
+    }
+    row.push({ value: ev.value, tag: ev.tag });
+  }
+  if (row.length) emit(row);
 }
 
 /**
@@ -505,6 +532,9 @@ export function parseHtmlTable(text, meta = {}) {
 
   let cells;
   let headerTexts = null;
+  /* Rows of every OTHER table in the file, so more than one sheet can be read as
+     the same list (see the merge below). */
+  let otherTables = null;
 
   if (hasDom) {
     const doc = new DOMParser().parseFromString(text, 'text/html');
@@ -518,23 +548,28 @@ export function parseHtmlTable(text, meta = {}) {
     const best = tables.length
       ? tables.reduce((b, t) => (t.querySelectorAll('td, th').length > b.querySelectorAll('td, th').length ? t : b), tables[0])
       : doc;
+    const rowsOf = (scope) => Array.from(scope.querySelectorAll('tr')).map((tr) => (
+      Array.from(tr.querySelectorAll('td, th')).map((node) => ({
+        value: cleanText(node.textContent),
+        tag: node.tagName.toLowerCase(),
+      }))
+    )).filter((r) => r.length);
     cells = [];
     const thTexts = [];
-    Array.from(best.querySelectorAll('tr')).forEach((tr) => {
-      const rowCells = Array.from(tr.querySelectorAll('td, th'));
-      if (rowCells.length === 0) return;
-      rowCells.forEach((node) => {
-        const value = cleanText(node.textContent);
-        cells.push(value);
-        if (node.tagName.toLowerCase() === 'th') thTexts.push(value);
+    rowsOf(best).forEach((row) => {
+      row.forEach((c) => {
+        cells.push(c.value);
+        if (c.tag === 'th') thTexts.push(c.value);
       });
       cells.push(null);
     });
     if (thTexts.length && matchHeaderRow(thTexts)) headerTexts = thTexts;
+    otherTables = tables.filter((t) => t !== best).map(rowsOf).filter((rows) => rows.length);
   } else {
     const parts = scanHtmlTableParts(text);
     cells = parts.cells;
     headerTexts = parts.headerTexts;
+    otherTables = parts.otherTables;
   }
 
   if (!cells || cells.filter((c) => c !== null).length === 0) {
@@ -545,6 +580,27 @@ export function parseHtmlTable(text, meta = {}) {
   if (!headerTexts) {
     const len = detectHeaderPrefix(cells);
     if (len > 0) headerTexts = cells.slice(0, len);
+  }
+
+  /* More than one sheet in one file.
+   *
+   * An HTML export of a workbook writes EACH SHEET as its own <table>, and an upload IS the
+   * whole outstanding list: reading only the biggest table would silently drop the other
+   * sheets' assets - and under this app's rule a dropped asset is one that looks inspected.
+   * So every other table whose header row matches the one we chose, column for column, is
+   * read as the same list: same columns, more rows. A title wrapper or a summary block has a
+   * different header, so it is still ignored - the match is what keeps them out.
+   */
+  if (headerTexts && otherTables && otherTables.length) {
+    const want = headerTexts.map((h) => String(h).trim().toLowerCase());
+    otherTables.forEach((rows) => {
+      const head = rows[0].map((c) => String(c.value).trim().toLowerCase());
+      if (!want.every((w, i) => head[i] === w)) return;
+      rows.slice(1).forEach((row) => {
+        row.forEach((c) => cells.push(c.value));
+        cells.push(null);
+      });
+    });
   }
 
   // The detected prefix covers only the fields we track, but the header ROW may

@@ -22,7 +22,7 @@
  * A classic bundle has no such ambiguity, and there are no dynamic imports to split.
  */
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import preact from '@preact/preset-vite';
 import tailwindcss from '@tailwindcss/vite';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root: resolve(here, 'src'),
   base: './',
-  plugins: [react(), tailwindcss()],
+  // The preset aliases react / react-dom to preact/compat, so the sources keep their imports.
+  plugins: [preact(), tailwindcss()],
   publicDir: resolve(here, 'src', 'static'),
   build: {
     outDir: resolve(here, 'public'),

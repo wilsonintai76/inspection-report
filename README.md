@@ -14,8 +14,9 @@ lima medan aset).
 Ada **dua peranan**, dan pemisahan itu berlaku di dalam Worker, bukan pada butang:
 
 - **Pembaca (viewer) - awam, tiada log masuk.** Sesiapa yang membuka pautan melihat
-  senarai semasa, Ringkasan Bahagian dan Sejarah Pemeriksaan. Tiada akaun, tiada apa-apa
-  untuk didaftarkan - dan tiada Langkah 1, kerana mereka tidak memuat naik apa-apa.
+  senarai semasa dan Ringkasan Bahagian. Tiada akaun, tiada apa-apa untuk didaftarkan -
+  dan tiada Langkah 1, kerana mereka tidak memuat naik apa-apa. **Sejarah Pemeriksaan
+  ialah alat admin** dan tidak dirender untuk pembaca sama sekali.
 - **Admin - perlu log masuk.** Memuat naik senarai, memadam titik masa dan menetapkan
   Bahagian. Butang **Muat naik senarai** pada tab Senarai Semasa membuka kotak **Log masuk
   admin**; selepas log masuk, dashboard admin (Langkah 1-3) muncul pada halaman yang sama.
@@ -30,12 +31,47 @@ ditulis oleh sesiapa bermakna sesiapa yang mempunyai pautan boleh memadam rekod.
 ## 1. Cepat mula
 
 1. Buka alamat Worker (contohnya `https://aset-pks.<akaun>.workers.dev`).
-2. Lepaskan semua fail senarai aset ke dalam kotak di **Langkah 1**.
+2. Lepaskan semua fail senarai aset ke dalam kotak di **Langkah 1** - fail, beberapa fail,
+   satu folder penuh, atau beberapa folder sekali gus.
 3. Semak tetapan dan tapisan di **Langkah 2**.
 4. Semak tab **Pertindihan** dan **Konflik Data**, kemudian eksport di **Langkah 3**.
 
 Muat naik itu sendiri menjadi satu titik masa dalam tab **Sejarah Pemeriksaan**, dan
 ia dikongsi: sesiapa yang membuka alamat yang sama melihat rekod yang sama.
+
+### Fail dalam beberapa folder
+
+Eksport satu laporan biasanya tinggal dalam folder sendiri (satu folder sebulan, satu folder
+sejabatan), jadi pemilih fail di **Langkah 1** mengambil folder, bukan hanya fail:
+
+| Cara | Apa yang dibaca |
+| --- | --- |
+| Lepas ke halaman | fail dan folder, di mana-mana pada halaman |
+| **Pilih fail...** | pilihan biasa; ulang untuk menambah daripada folder lain |
+| **Tambah folder...** | satu folder penuh, termasuk subfoldernya |
+
+Empat perkara yang telah diputuskan, kerana ia mudah menjadi salah faham:
+
+- **Senarai ditambah, bukan diganti.** Pilih daripada folder A, kemudian folder B, dan
+  kedua-duanya berada dalam senarai yang sama.
+- **Dialog folder memberi SATU folder setiap kali.** Ini had dialog Windows sendiri:
+  Chromium meminta `FOS_PICKFOLDERS` dan tidak pernah `FOS_ALLOWMULTISELECT`, jadi
+  menekan CTRL untuk memilih dua folder tetap memberi satu. Halaman ini sudah meminta
+  `webkitdirectory` **dan** `multiple` - tidak ada apa-apa lagi yang boleh dibuat di sini.
+  Untuk menambah beberapa folder: tekan **Tambah folder...** berulang kali (senarai tidak
+  diganti), lepaskan kesemua folder dari Explorer sekali gus, atau pilih folder induk
+  kerana subfoldernya diambil sekali.
+- **Nama fail tidak unik.** Tiga folder bulanan mengandungi `Senarai_Aset.xls` yang sama
+  nama, jadi fail dikenali dengan **laluannya** (`2026-09/Senarai_Aset.xls`) dalam senarai
+  fail, tab **Butiran Fail**, dan laporan konflik. Tanpa itu, ketiga-tiganya kelihatan
+  seperti satu fail yang sama.
+- **Fail yang dilangkau diberitahu.** Folder eksport juga mengandungi `~$Senarai.xls`,
+  `.DS_Store`, gambar dan fail lain yang bukan jadual; fail sebegitu tidak dibaca, dan
+  satu notis menyatakan berapa banyak dan mengapa. Fail yang **anda** pilih atau lepas
+  secara terus tidak ditapis begitu - ia sampai ke penghurai, yang memberi sebabnya sendiri.
+
+Had keselamatan: 400 fail, 8 aras folder, dan 32 MB satu fail. Melepasi had itu bukan
+ralat - bakinya dilaporkan sebagai dilangkau.
 
 > **Mod luar talian.** `dist/Laporan_Aset_Belum_Diperiksa_PKS.html` boleh dibuka dengan dua
 > klik tanpa sebarang pelayan - tetapi kerana halaman itu kini dipecahkan (lihat bahagian 3),
@@ -126,8 +162,11 @@ Ia kemudian:
   **kekal dan dikongsi**. Tiada apa-apa disimpan dalam pelayar.
 - **Ringkasan Bahagian** - bilangan aset belum diperiksa bagi setiap bahagian, sekali
   pandang. Klik mana-mana baris untuk menapis senarai penuh kepada bahagian tersebut.
-- **Sejarah Pemeriksaan** - setiap muat naik menjadi satu titik masa, dan aset yang
-  **hilang** daripada senarai dianggap **sudah diperiksa**. Lihat bahagian seterusnya.
+- **Sejarah Pemeriksaan** (admin sahaja) - setiap muat naik menjadi satu titik masa, dan label yang
+  **hilang** daripada senarai terbaharu ditunjukkan di situ. Angka **belum diperiksa**,
+  **sudah diperiksa** dan **total aset** pada kad tab itu ialah angka **daftar** yang disalin
+  oleh admin, bukan kiraan halaman - dan angka belum diperiksa itu ialah rujukan yang
+  menyemak setiap muat naik. Lihat bahagian seterusnya.
 - **Tetapkan Bahagian** - rekod yang tiada Bahagian dalam fail boleh ditetapkan secara
   manual daripada senarai bahagian sedia ada.
 
@@ -141,10 +180,16 @@ log masuk hanya **tulisan**, dan halaman itu sendiri yang menawarkan pintunya.
 | Langkah 1 (muat naik) dan Langkah 2 (tetapan gabung) | ada | tiada |
 | **Senarai Semasa** (dibaca daripada D1) | ada | skrin utama |
 | Ringkasan Bahagian | ada | ada |
-| Sejarah Pemeriksaan | ada, termasuk **Padam** | baca sahaja |
+| Sejarah Pemeriksaan | ada, termasuk **Padam** | **tiada langsung** - alat admin |
 | Tetapkan Bahagian | ada | tiada |
 | Pertindihan / Konflik / Butiran Fail | ada | tiada - itu diagnosis gabungan |
 | Eksport dan cetak senarai | ada | ada, untuk apa yang dilihat sahaja |
+
+> **Sejarah Pemeriksaan tidak dirender untuk pembaca**, bukan sekadar disembunyikan: tab itu
+> membawa angka daftar, pergerakan antara muat naik dan butang padam, dan sinar satu nod yang
+> tersembunyi masih boleh dicapai. Tab yang pembaca boleh guna ialah tab yang pembaca dapat.
+> Kalau peranan berubah ketika tab itu terbuka (admin log keluar, atau pratonton viewer
+> dihidupkan), halaman itu berpindah sendiri ke Senarai Semasa - bukan panel kosong.
 
 **Viewer membaca senarai daripada D1, bukan memuat naik fail.** Senarai itu ialah
 pemerhatian terakhir - aset yang masih belum diperiksa - jadi ia sentiasa yang terkini,
@@ -212,8 +257,12 @@ dicipta secara tersilap taip.
 
 Senarai ini ialah **"Aset Belum Diperiksa"**. Ia tiada tarikh dan tiada status
 pemeriksaan. Jadi satu-satunya bukti bahawa sesuatu aset sudah diperiksa ialah ia
-**hilang** daripada senarai pada muat naik berikutnya. Seluruh ciri ini dibina atas
-inferens tersebut.
+**hilang** daripada senarai pada muat naik berikutnya.
+
+> **Kecuali angka pada kad.** Kad **Total aset** dan **Sudah diperiksa** **tidak**
+dikira daripada pemerhatian itu - ia disalin daripada ringkasan *Sistem Pengurusan Aset
+Alih* oleh admin (butang **Kemas kini angka**), kerana daftar itulah yang berkuasa.
+Sehingga ia disalin, kad menunjukkan "**- belum ditetapkan**" dan bukan kiraan halaman.
 
 **Cara guna:**
 
@@ -226,17 +275,19 @@ inferens tersebut.
 
 | Perkara | Maksud |
 | --- | --- |
-| **Diperiksa** | Ada dalam senarai lama, tiada dalam senarai baharu |
+| **Hilang** | Ada dalam senarai lama, tiada dalam senarai baharu (inilah yang diukur oleh lajur "Hilang") |
 | **Masih belum** | Ada dalam kedua-dua senarai |
 | **Baharu** | Muncul kali pertama - aset baharu didaftarkan |
 | **Muncul semula** | Pernah hilang, kini ada semula - **sila semak label** |
 
-Jadual **Kemajuan mengikut bahagian** menunjukkan Awal &rarr; Diperiksa &rarr; Akhir
+Jadual **Perubahan sejak muat naik terakhir** menunjukkan Awal &rarr; Hilang &rarr; Akhir
 dengan peratus, dan tab ini juga menyenaraikan aset yang paling lama belum diperiksa.
+Lajur itu sengaja tidak dipanggil "Diperiksa": halaman ini memerhati **senarai**, bukan
+daflar aset.
 
 > **Penting: muat naik senarai PENUH setiap kali.** Jika anda memuat naik sebahagian
-> bahagian sahaja, aset yang tiada dalam eksport itu akan tersalah ditandakan sebagai
-> "sudah diperiksa". Satu eksport penuh bagi setiap pusingan.
+> bahagian sahaja, aset yang tiada dalam eksport itu akan tersalah muncul sebagai
+> "hilang". Satu eksport penuh bagi setiap pusingan.
 >
 > **"Muncul semula" ialah amaran, bukan kejayaan.** Aset yang hilang kemudian muncul
 > kembali biasanya bermakna labelnya salah taip atau diubah, bukan diperiksa dua kali.
@@ -273,7 +324,7 @@ perlu menapis satu per satu:
 | Lajur | Maksud |
 | --- | --- |
 | Bahagian | Nama jabatan / unit |
-| Jumlah Aset | Bilangan aset belum diperiksa (= bilangan label) |
+| Aset Belum Diperiksa | Bilangan aset belum diperiksa (= bilangan label) |
 | % | Peratus daripada keseluruhan |
 | Bilangan Lokasi | Berapa lokasi berbeza dalam bahagian itu |
 | Contoh Lokasi | Tiga lokasi terbesar dengan bilangannya |
@@ -298,7 +349,7 @@ Klik mana-mana baris untuk menapis senarai penuh. Dua eksport disediakan:
 
 ## 3. Deploy ke Cloudflare (satu Worker sahaja)
 
-**Antara muka dibina dengan React + Vite + Tailwind + TypeScript.** Komponen dalam
+**Antara muka dibina dengan Preact (melalui `preact/compat`) + Vite + Tailwind + TypeScript.** Komponen dalam
 `src/components/`, logik tulen (penapisan, ringkasan, eksport) dalam `src/lib/`, keadaan dan
 semua panggilan ke Worker dalam `src/state/`. Vite membungkusnya menjadi aset berhash yang
 dicache selama-lamanya.
@@ -358,7 +409,12 @@ Lawatan ulangan turun **~99%**. Kosnya jujur: lawatan pertama menjadi lebih bera
 React (~45 KB) - itulah harga yang dibayar untuk struktur komponen, dan ia dibayar sekali
 sahaja setiap pelawat, bukan setiap lawatan.
 
-> **Kenapa React?** Bukan kerana kelajuan - angka di atas menunjukkan ia menambah ~45 KB
+> **Kenapa Preact?** Sumber kekal menulis `import ... from 'react'`; Vite (`@preact/preset-vite`)
+> dan `paths` dalam `tsconfig.json` memetakannya ke `preact/compat`. Bundle JS jatuh daripada
+> 331.7 KB (gzip 103 KB) dengan React kepada 123.3 KB (gzip 41 KB). Angka React di atas ialah
+> ukuran lama.
+>
+> **Kenapa React (dahulu)?** Bukan kerana kelajuan - angka di atas menunjukkan ia menambah ~45 KB
 > pada lawatan PERTAMA, dan tidak mengurangkan bilangan panggilan API atau baris yang dibaca
 > D1. Ia dipilih untuk **penyelenggaraan kod**: 2,742 baris dalam satu fail HTML menjadi
 > komponen bernama, dan suite ujian yang sama memaksa tingkah laku itu kekal. Yang
@@ -579,7 +635,7 @@ senarai-aset-merge/
     _headers          beri aset berhash kebenaran cache selama-lamanya
   src/
     index.html        templat cangkerang (Vite menggantikan <script> dengan aset)
-    main.tsx          titik masuk: pasang React, eksport __uiHarness__
+    main.tsx          titik masuk: pasang Preact, eksport __uiHarness__
     App.tsx           susun atur halaman dan peraturan peranan
     styles.css        Tailwind: token dalam @theme, kelas komponen dalam @layer components
     types.ts          kontrak yang dikongsi: rekod aset, bentuk API, keadaan aplikasi
@@ -676,7 +732,7 @@ Tiga perkara tentang TypeScript, kerana semuanya boleh memecahkan binaan tanpa a
   dalam `src/types.ts` - dua salinan akan bersetuju hari ini dan tersasar kemudian.
 - **`src/types.ts` ialah satu-satunya tempat kontrak ditakrifkan.** Sebelum migrasi, bentuk
   API Worker dan `window.__uiHarness__` hanya wujud dalam prosa; suite pelayar membaca DOM
-  melalui nama kelas (`.notice.warn`, `table.grid`, `.card .k`), jadi nama itu adalah
+  melalui nama kelas (`.notice.warn`, `table.data-grid`, `.card .k`), jadi nama itu adalah
   sebahagian daripada kontrak, bukan gaya. Bentuk `__uiHarness__` diperoleh daripada
   `src/harness.ts`, jadi ia tidak boleh tersasar daripada apa yang didedahkan.
 
@@ -691,7 +747,7 @@ Memerlukan Node.js 20.19+ (Vite 7; `engines` dalam `package.json` menyatakannya)
 ```bash
 npm run typecheck # tsc --noEmit sahaja - 0 ralat diperlukan sebelum apa-apa di-deploy
 npm run check     # typecheck + semak sumber ASCII + binaan benar-benar terpecah dan boleh dicache
-npm test          # ujian regresi enjin penghuraian (187)
+npm test          # ujian regresi enjin penghuraian dan pengambilan fail (241)
 npm run build     # Vite membungkus -> public/ + dist/, kemudian menyemaknya
 npm run verify    # typecheck + check + ujian, kemudian bina
 npm run dev:app   # pelayan pembangunan Vite (proksi /api ke Worker sebenar)
@@ -701,6 +757,7 @@ npm run storage   # buktikan halaman tidak menyimpan apa-apa dalam pelayar
 npm run history   # tab sejarah dirender daripada data D1
 npm run assign    # penetapan Bahagian disimpan dalam D1
 npm run viewer    # skrin pembaca awam: senarai D1, pautan log masuk, tulis ditolak
+npm run drop      # laluan 'lepaskan fail': sekali sahaja, dan dari folder mana
 npm run cf:test   # uji Worker terhadap SQLite sebenar (184 pemeriksaan)
 npm run cf:smoke  # uji Worker yang telah di-deploy, melalui HTTPS
 ```
@@ -762,29 +819,84 @@ dijalankan, dan tiada fail pangkalan data untuk dijaga.
 | `observation_assets` | Label yang hadir dalam setiap titik masa, dengan butiran aset |
 | `dept_snapshots` | Bilangan aset setiap bahagian pada setiap titik masa |
 | `bahagian_overrides` | Tetapan Bahagian manual, disimpan mengikut **label** aset |
+| `manual_figures` | Tiga angka daftar yang disalin oleh admin (**Total aset**, **Sudah diperiksa**, **Belum diperiksa**) daripada ringkasan Sistem Pengurusan Aset Alih, satu baris sahaja |
 
-### Setiap muat naik ialah satu SNAPSHOT, bukan reset
+### Setiap muat naik menggantikan SELURUH senarai
 
-Soalan yang selalu timbul: "laporan ini untuk aset yang **belum diperiksa**, jadi bilangannya
-turun dari semasa ke semasa - patutkah D1 di-*reset* setiap kali?"
+Fail yang dimuat naik **ialah** senarai aset yang belum diperiksa - itulah yang dieksport oleh
+sistem sumber. Jadi muat naik tidak perlu digabungkan dengan apa-apa: ia **menggantikan**
+senarai semasa, dan aset yang tidak lagi ada dalamnya ialah aset yang sudah diperiksa sejak
+kali terakhir.
 
-Jawapannya **tidak, dan ia tidak perlu**: muat naik melakukannya sendiri, dan reset akan
-memusnahkan maklumat yang menjadikan laporan ini berguna.
+> **Muat naik fail yang lengkap.** Sebab peraturan ini dipilih: satu eksport boleh jadi
+> sebahagian sahaja - sebahagian baris tiada `Bahagian`, dan aset satu bahagian boleh tersebar
+> dalam beberapa helaian atau fail. Kalau muat naik dianggap "inilah bahagian-bahagian yang
+> saya sebut sahaja", maka satu fail yang tidak menyebut sesuatu bahagian akan menyimpan
+> bahagian itu daripada dikira sebagai sudah diperiksa - dan sebaliknya, satu fail separuh
+> akan menamatkan bahagian yang tiada di dalamnya. Peraturan yang tidak boleh salah ialah:
+> **muat naik semuanya, dapatkan senarai baharu.**
 
 | Langkah | Apa yang D1 simpan |
 | --- | --- |
-| Admin memuat naik eksport baharu (yang lebih pendek) | Satu **titik masa baharu**. Senarai semasa = titik masa **terbaharu**, jadi pembaca terus melihat senarai yang baru |
-| Aset yang tiada dalam eksport baharu | Ditandakan **"Sudah diperiksa"** (itulah maksud "hilang dari senarai") |
-| Aset yang muncul dalam eksport baharu | Ditandakan **baharu**, dan muncul semula dalam senarai belum diperiksa |
-| Muat naik yang *sama tepat* - **semua** medan sama, walaupun susunan baris berbeza | Ditolak **409** dan tiada titik masa dicipta - muat naik semula fail yang sama tidak menggelembungkan apa-apa |
-| Fail yang **dibetulkan** - label sama, satu `Bahagian` diubah dalam sistem sumber | **Diterima** sebagai titik masa baharu (inilah cara pembetulan sampai ke D1), dan label yang sama tidak dikira diperiksa |
+| Admin memuat naik eksport | Satu **titik masa baharu**, dan itulah senarai semasa |
+| Aset yang tiada dalam senarai baharu | Ditandakan **"Sudah diperiksa"** (itulah maksud "hilang dari senarai") |
+| Aset yang muncul dalam eksport baharu | Ditandakan **baharu**, dan muncul dalam senarai belum diperiksa |
+| Muat naik yang *sama tepat* dengan senarai terakhir | Ditolak **409** dan tiada titik masa dicipta - muat naik semula fail yang sama tidak menggelembungkan apa-apa |
+| Fail yang **dibetulkan** - label sama, satu `Bahagian` diubah dalam sistem sumber | **Diterima** sebagai titik masa baharu (inilah cara pembetulan sampai ke D1) |
 | Muat naik yang tersilap | **Padam** titik masa itu dalam tab Sejarah; titik masa sebelumnya kembali menjadi semasa |
 | Nak mula dari kosong | **Padam semua titik masa** (admin sahaja) - kotak pengesahan menyebut bilangannya dulu, dan tetapan Bahagian manual tidak diubah |
 
+Titik masa lama **tidak** dibuang: hanya senarai semasa yang digantikan. Sejarah, jadual
+perubahan dan kadar kemajuan datang daripada titik-titik masa itu, jadi jika satu muat naik
+tersilap, padam titik masa itu dan senarai sebelum ini kembali menjadi semasa.
+
 Sebabnya: "belum diperiksa" dan "sudah diperiksa" **bukan** keadaan dalam fail - ia
-perbandingan antara dua titik masa. Reset memadam perbandingan itu, dan selepas reset
-setiap aset kelihatan "baru" sekali lagi. Jadi aliran kerja yang betul ialah: eksport baharu
-&rarr; muat naik &rarr; halaman melaporkan "X aset hilang (sudah diperiksa), Y aset baharu".
+perbandingan antara dua senarai. Jadi aliran kerja yang betul ialah:
+eksport &rarr; muat naik &rarr; halaman melaporkan "X aset hilang, Y aset baharu".
+
+### Apabila eksport berbeza daripada daftar aset - dan cara ia disemak
+
+Aplikasi ini ada satu kerja: **menjejaki aset yang belum diperiksa**. Setiap fail yang
+dimuat naik ialah senarai aset yang masih belum diperiksa, dan itulah **kiraan fail**.
+
+Tiga angka lain **tidak boleh dikira daripada muat naik**: eksport tidak memberitahu berapa
+banyak aset yang dipegang institusi, berapa banyak yang sudah diperiksa, atau berapa banyak
+yang daftar sendiri kata masih belum diperiksa. Ketiga-tiganya disalin daripada **ringkasan
+Sistem Pengurusan Aset Alih** oleh admin (butang **Kemas kini angka** pada tab Sejarah) dan
+disimpan dalam D1.
+
+**Angka SPAA "belum diperiksa" itulah kunci penyemakan.** Ia dipaparkan pada kad sebagai
+angka laporan, dan kiraan fail diletakkan di sebelahnya. Jika kedua-duanya berbeza, tab
+Sejarah menunjukkan panel **beza SPAA-dengan-fail**:
+
+> **Angka SPAA berbeza dengan fail: beza 6 644 aset** - SPAA kata 6 984 aset masih belum
+> diperiksa, tetapi fail terakhir menyenaraikan 340. Kemungkinan fail yang dimuat naik itu
+> **bukan senarai penuh** - semak sama ada semua bahagian dan semua helaian sudah dieksport -
+> atau angka SPAA perlu dikemas kini.
+
+Dua pemeriksaan yang berbeza maksudnya, dan kedua-duanya perlu ada:
+
+| Pemeriksaan | Antara | Maksud beza |
+| --- | --- | --- |
+| Aritmetik daftar (`#figuresMismatch`) | Total aset vs (sudah + belum diperiksa) | **Salah salin.** Ketiga-tiganya datang daripada satu ringkasan, jadi ia sepatutnya menambah |
+| SPAA lawan fail (`#figuresFileGap`) | Angka SPAA vs kiraan fail | **Fail tidak lengkap, atau daftar sudah basi.** Ini perbezaan sebenar, bukan kesilapan menaip |
+
+Muat naik **tidak ditolak** kerana beza itu - merekod senarai separuh kadang-kadang betul -
+tetapi bezanya disebut dengan angka yang jelas, supaya ia tidak boleh berlalu tanpa disedari.
+
+| Peraturan | Mengapa |
+| --- | --- |
+| Angka daftar **tidak pernah direka** | Selagi admin belum menyalinnya, kad itu menunjukkan "**-  belum ditetapkan**" dan tab Sejarah menggesa supaya ia disetkan. Kiraan halaman sendiri (setiap label yang pernah dilihat D1) hanya muncul dalam tooltip dan dalam dialog, **tidak** sebagai jawapan |
+| **Kiraan fail tidak pernah diedit** | Ia fakta tentang fail terakhir. Yang boleh disalin ialah angka daftar, dan kedua-duanya dipaparkan bersebelahan - bukan salah satu menggantikan yang lain |
+| Angka daftar **kekal** selepas muat naik baharu | Pembetulan itu satu keputusan, bukan pemerhatian - muat naik seterusnya tidak sepatutnya memadamnya |
+| **Kosongkan angka daftar** membuang ketiga-tiganya | Kad kembali kepada "belum ditetapkan", kiraan fail kembali memimpin kad, dan tarikh kemas kini jatuh kembali kepada muat naik terakhir |
+| Aritmetik daftar **ditunjukkan hidup-hidup** | Dalam dialog, sebelum disimpan: sepadan atau beza, kedua-duanya dinyatakan |
+| Kad kelima ialah **tarikh** kemas kini terakhir | Ia dahulunya mengulangi bilangan "sudah diperiksa"; tarikhnya ialah muat naik terakhir atau pindaan angka daftar, yang mana lebih baru |
+
+> **Angka "diperiksa" dalam jadual kemajuan tetap berbeza.** Jadual *Kemajuan sejak
+> pemeriksaan terakhir* mengira label yang **hilang** antara dua muat naik. Itu pemerhatian
+tentang senarai, bukan angka daftar, jadi ia tidak ditukar - tetapi kedua-duanya boleh
+berbeza, dan itu memang dijangka.
 
 Saiz pula bukan masalah: satu titik masa = satu baris dalam `observations` + satu baris
 setiap aset. 536 aset × 52 muat naik mingguan dalam setahun &asymp; 28 ribu baris - jauh di
@@ -795,7 +907,7 @@ bawah had D1 percuma.
 > Jika ia membandingkan label sahaja, fail yang *dibetulkan* - aset yang sama, satu
 > `Bahagian` dibaiki dalam sistem sumber - akan ditolak sebagai "sudah ada", dan pembetulan
 > itu tidak akan pernah sampai ke D1. Susunan baris dalam fail tidak dikira.
-
+>
 > **Kosongkan semula adalah manual, bukan automatik.** "Reset setiap kali muat naik" tidak
 > dilakukan: selepas reset tiada apa-apa untuk dibandingkan, jadi setiap aset kelihatan
 > belum diperiksa. Jika anda benar-benar mahu bermula kosong (selepas ujian, contohnya),
@@ -845,7 +957,7 @@ pernah dicache: jawapan 201/409 yang dicache ialah pembohongan.
 | `GET /api/bootstrap` | **Semua yang halaman perlukan, dalam satu permintaan** - identiti, kesihatan, status, senarai semasa, kemajuan, sejarah dan tetapan Bahagian. |
 | `GET /api/health` | Keadaan perkhidmatan dan saiz pangkalan data |
 | `GET /api/status` | Ringkasan semasa |
-| `GET /api/current` | Senarai semasa: aset dalam pemerhatian terakhir (ini yang dibaca pembaca) |
+| `GET /api/current` | Senarai semasa: aset dalam pemerhatian terakhir, iaitu senarai yang dimuat naik (ini yang dibaca pembaca) |
 | `GET /api/me` | Peranan pemanggil: `role`, `mode`, `loginMethod`, `passwordConfigured`, `writeAllowed`, `adminLoginPath` |
 | `GET /api/progress` | Kemajuan setiap titik masa, termasuk pecahan **setiap bahagian** |
 | `GET /api/history` | Semua label setiap titik masa (tab Sejarah) |
@@ -859,6 +971,7 @@ pernah dicache: jawapan 201/409 yang dicache ialah pembohongan.
 | `GET`/`POST /api/admin/logout` | Log keluar: buang kuki sesi (dan, dalam mod `enforce`, kuki Access) |
 | `POST /api/admin/observations` | Rekod satu pemerhatian (dihantar oleh aplikasi) |
 | `POST /api/admin/overrides` | Simpan atau batalkan tetapan Bahagian |
+| `POST /api/admin/figures` | Simpan angka daftar tulisan tangan (`totalAssets`, `inspected`, `outstanding`); `null` pada ketiga-tiganya membuangnya. Nilai bukan integer 0-10000000 ditolak 400 |
 | `DELETE /api/admin/observations/<id>` | Padam satu titik masa (butang **Padam** dalam tab Sejarah) |
 | `DELETE /api/admin/observations` | Padam **semua** titik masa (butang **Padam semua titik masa**; tetapan Bahagian manual kekal) |
 

@@ -15,7 +15,7 @@
  *     notices). Asserting on state alone would pass even if nothing were drawn.
  *
  * Everything the suites assert about the DOM - #mergedWrap tbody tr, #summaryWrap
- * tbody tr[data-dept], .notice.warn, #cards .card .k/.v, table.grid, .tabLabel - is part
+ * tbody tr[data-dept], .notice.warn, #cards .card .k/.v, table.data-grid, .tabLabel - is part
  * of this contract, which is why those class names survived the move to Tailwind.
  */
 import { toCsv, toHtmlWorkbook } from './parser';
@@ -30,6 +30,8 @@ export interface HarnessFile {
   name: string;
   text: string;
   sha?: string;
+  /** Where it sat inside its folder, e.g. "2026-09/ABR.xls"; "" when picked alone. */
+  path?: string;
 }
 
 export interface HarnessDeps {
@@ -75,7 +77,9 @@ function buildHarness({ api, getState }: HarnessDeps) {
     loadFiles: (entries: HarnessFile[]) => {
       api.dispatchSync({
         type: 'LOAD_FILES',
-        entries: entries.map((e) => ({ name: e.name, size: e.text.length, text: e.text, sha: e.sha || '' })),
+        entries: entries.map((e) => ({
+          name: e.name, path: e.path || '', size: e.text.length, text: e.text, sha: e.sha || '',
+        })),
         append: false,
         pendingRun: false,
       });
@@ -109,6 +113,7 @@ function buildHarness({ api, getState }: HarnessDeps) {
         },
         perFile: s.files.map((f) => ({
           name: f.name,
+          path: f.path || '',
           rows: (f.records || []).length,
           warnings: (f.warnings || []).length,
           sha: f.sha,
@@ -152,13 +157,20 @@ function buildHarness({ api, getState }: HarnessDeps) {
         history: {
           connected: s.d1.up,
           runs: h ? h.runs.length : 0,
-          outstanding: h ? h.summary.outstanding : 0,
-          resolved: h ? h.summary.resolved : 0,
+          /* Two different numbers, and the difference between them IS the double check:
+             what the newest file listed, and what the register says should be waiting. */
+          outstandingFile: h ? h.summary.outstandingFile : 0,
+          /* The register's own figures (null until keyed in) and the uploads' inferences,
+             side by side, because the difference between them IS the feature. */
+          resolved: h ? h.summary.resolved : null,
+          registerTotal: h ? h.summary.total : null,
+          registerOutstanding: h ? h.summary.outstanding : null,
+          derived: h ? h.summary.derived : { total: 0, inspected: 0 },
           reappeared: 0,
           lastInspected: h && h.runs.length ? h.runs[h.runs.length - 1].inspected : 0,
           tabCounter: txt('cHist'),
-          renderedRuns: qa('#historyWrap table.grid tbody tr').length,
-          renderedTables: qa('#historyWrap table.grid').length,
+          renderedRuns: qa('#historyWrap table.data-grid tbody tr').length,
+          renderedTables: qa('#historyWrap table.data-grid').length,
           progress: h && h.runs.length
             ? h.runs[h.runs.length - 1].deptProgress.map((p) => ({
               bahagian: p.bahagian, awal: p.awal, inspected: p.inspected, akhir: p.akhir,
@@ -206,6 +218,43 @@ function buildHarness({ api, getState }: HarnessDeps) {
         overrides: Object.keys(s.d1.overrides || {}).length,
         lastError: s.d1.lastError,
         note: txt('serverLink'),
+      };
+    },
+
+    /**
+     * The report's own figures: what the API holds, what the cards would show, and the
+     * arithmetic between them.
+     *
+     * `cards` is read from the DOM rather than from state, so a suite proves the numbers
+     * are ON SCREEN and not merely computed - and `mismatch` is the sentence the report
+     * shows when the three of them do not agree, which is a legitimate outcome.
+     */
+    figures: () => {
+      const s = state();
+      const h = historyView({ status: s.d1.status, progress: s.d1.progress });
+      const cell = (c: HTMLElement, sel: string): string => {
+        const el = c.querySelector(sel);
+        return el ? (el.textContent || '').trim() : '';
+      };
+      return {
+        manual: (s.d1.status && s.d1.status.manual) || null,
+        /* The register's figures are NULL until an admin copies them in - that is the whole
+           point of the feature, so the suites can tell "not set" from "set to 0". */
+        total: h ? h.summary.total : null,
+        inspected: h ? h.summary.resolved : null,
+        outstanding: h ? h.summary.outstanding : null,
+        outstandingFile: h ? h.summary.outstandingFile : 0,
+        manualTotal: h ? h.summary.total !== null : false,
+        manualInspected: h ? h.summary.resolved !== null : false,
+        manualOutstanding: h ? h.summary.outstanding !== null : false,
+        derived: h ? h.summary.derived : { total: 0, inspected: 0 },
+        updatedAt: h ? h.summary.updatedAt : null,
+        cards: qa('#historyWrap .cards .card').map((c) => ({
+          k: cell(c, '.k'), v: cell(c, '.v'), sub: cell(c, '.sub'),
+        })),
+        mismatch: txt('figuresMismatch'),
+        /* SPAA against the uploaded file: the panel that catches a half-complete export. */
+        fileGap: txt('figuresFileGap'),
       };
     },
 
@@ -308,6 +357,34 @@ function buildHarness({ api, getState }: HarnessDeps) {
     /** Column headings of the list table, so a role-specific column can be proved absent. */
     listHeaders: () => qa('#mergedWrap thead th').map((th) => (th.textContent || '').trim()),
 
+    /**
+     * Geometry of one table: do the headings sit over their own columns?
+     *
+     * This is the one thing a text assertion cannot see. The tables were `class="grid"`, and
+     * that collided with Tailwind's `.grid { display: grid }` utility: the thead and the tbody
+     * became INDEPENDENT grids, each sizing its own columns, so every heading drifted off its
+     * cells while all 34 UI checks stayed green - they only ever read text.
+     *
+     * `drift` is the widest gap, in pixels, between a heading's right edge and its column's;
+     * `width` is reported so a table that is merely hidden (zero-sized) cannot pass quietly.
+     */
+    tableLayout: (selector: string, index = 0) => {
+      const t = qa(selector)[index];
+      if (!t) return null;
+      const head = Array.from(t.querySelectorAll('thead th'));
+      const row = t.querySelector('tbody tr');
+      const cells = row ? Array.from(row.querySelectorAll('td')) : [];
+      const right = (el: Element): number => el.getBoundingClientRect().right;
+      return {
+        display: getComputedStyle(t).display,
+        width: Math.round(t.getBoundingClientRect().width),
+        columns: head.length,
+        drift: head.length && cells.length === head.length
+          ? Math.round(Math.max(...head.map((th, i) => Math.abs(right(th) - right(cells[i])))))
+          : -1,
+      };
+    },
+
     listNote: () => txt('mergedCount'),
 
     /** Click a department row in the summary, as a user would, and report the filter. */
@@ -321,6 +398,29 @@ function buildHarness({ api, getState }: HarnessDeps) {
         viewerSelect: byId('selViewerBahagian') ? (byId('selViewerBahagian') as HTMLSelectElement).value : null,
         adminSelect: byId('selBahagian') ? (byId('selBahagian') as HTMLSelectElement).value : null,
         tab: s.tab,
+      };
+    },
+
+    /**
+     * Press a card that carries an action, as a user would.
+     *
+     * `tag` is the point of this method: a card with an action must be a real BUTTON, not a
+     * div that happens to react to a click, and the suites assert that. `focused` is how
+     * "the list it counts is now open" is proved without asserting on scroll position.
+     */
+    clickCard: (id: string) => {
+      const btn = byId(id);
+      if (!btn) return null;
+      btn.click();
+      const s = state();
+      return {
+        tag: btn.tagName,
+        label: (btn.textContent || '').trim(),
+        tab: s.tab,
+        bahagian: s.bahagian,
+        query: s.query,
+        viewerSelect: byId('selViewerBahagian') ? (byId('selViewerBahagian') as HTMLSelectElement).value : null,
+        focused: document.activeElement ? (document.activeElement as HTMLElement).id : '',
       };
     },
 

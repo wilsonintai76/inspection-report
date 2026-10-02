@@ -137,22 +137,62 @@ const RUN1 = new Date(Date.now() + 3600e3).toISOString();
 const RUN2 = new Date(Date.now() + 7200e3).toISOString();
 const RUN3 = new Date(Date.now() + 10800e3).toISOString();
 
+/* ---- the snapshot rule, mirrored in Node ------------------------------------------
+ *
+ * The uploaded list IS the whole outstanding list, so an upload simply REPLACES the current
+ * one and a label that disappears from it has been inspected since. The expectations below
+ * are DERIVED from that rule over the fixtures rather than written down as numbers, so if
+ * the rule is ever changed by accident, this suite disagrees instead of agreeing with a
+ * stale figure. The fixture's own size is asserted once, because every count below is
+ * stated in terms of it.
+ */
+const NO_DEPT_W = '(TIADA BAHAGIAN)';
+const deptKey = (r) => (String(r.Bahagian || '').trim() || NO_DEPT_W);
+const labelsOf = (rows) => new Set(rows.map((r) => r.Label));
+
+/** How many assets each department contributes to a list, blank Bahagian included. */
+function deptCount(rows) {
+  const m = new Map();
+  rows.forEach((r) => {
+    const d = deptKey(r);
+    m.set(d, (m.get(d) || 0) + 1);
+  });
+  return m;
+}
+
+const deptsOf = (rows) => new Set(rows.map(deptKey));
+const firstSet = labelsOf(recs1);
+const secondSet = labelsOf(recs2);
+/* Inspected = gone from the new list. New = not in the old list. */
+const goneLabels = [...firstSet].filter((l) => !secondSet.has(l));
+const freshLabels = [...secondSet].filter((l) => !firstSet.has(l));
+const everSeen = new Set([...firstSet, ...secondSet]);
+const secondDepts = deptCount(recs2);
+
+/* A label that really went away, and one that is still outstanding. */
+const gone = recs1.find((r) => !secondSet.has(r.Label));
+const alive = recs2.find((r) => firstSet.has(r.Label));
+
 console.log('\n== Worker: rekod pemerhatian ==');
 const o1 = await post('/api/observations', { observedAt: RUN1, source: 'w-A', records: recs1 });
+check('fixture: 473 aset dalam fail 1, 263 dalam muat naik kedua, 536 semuanya',
+  recs1.length === 473 && recs2.length === 263 && everSeen.size === 536,
+  `${recs1.length} / ${recs2.length} / ${everSeen.size}`);
 check('pemerhatian 1 diterima (201)', o1.status === 201, `${o1.status} ${JSON.stringify(o1.body)}`);
 check(`mencatat ${recs1.length} aset`, o1.body?.assets === recs1.length, String(o1.body?.assets));
-check('semuanya baharu', o1.body?.added === recs1.length, String(o1.body?.added));
+check('semuanya baharu', o1.body?.added === recs1.length, `${o1.body?.added} vs ${recs1.length}`);
 check('tiada diperiksa', o1.body?.inspected === 0, String(o1.body?.inspected));
 
 const o2 = await post('/api/observations', { observedAt: RUN2, source: 'w-B', records: recs2 });
 check('pemerhatian 2 diterima (201)', o2.status === 201, `${o2.status} ${JSON.stringify(o2.body)}`);
-const expected = recs1.length - 200;
-check(`mengesan ${expected} aset diperiksa`, o2.body?.inspected === expected,
-  `${o2.body?.inspected} vs ${expected}`);
-check('mengesan 63 aset baharu', o2.body?.added === 63, String(o2.body?.added));
-check('imbangan betul',
-  recs1.length - (o2.body?.inspected ?? 0) + (o2.body?.added ?? 0) === recs2.length,
-  `${recs1.length} - ${o2.body?.inspected} + ${o2.body?.added} vs ${recs2.length}`);
+check(`mengesan ${goneLabels.length} aset diperiksa (senarai ini menggantikan yang lama)`,
+  o2.body?.inspected === goneLabels.length, `${o2.body?.inspected} vs ${goneLabels.length}`);
+check(`mengesan ${freshLabels.length} aset baharu`,
+  o2.body?.added === freshLabels.length, `${o2.body?.added} vs ${freshLabels.length}`);
+check(`muat naik melaporkan ${secondDepts.size} bahagian`,
+  o2.body?.departments === secondDepts.size, `${o2.body?.departments} vs ${secondDepts.size}`);
+check('baki selepas muat naik kedua = saiz fail itu',
+  o2.body?.outstanding === recs2.length, `${o2.body?.outstanding} vs ${recs2.length}`);
 
 const dup = await post('/api/observations', { observedAt: RUN3, records: recs2 });
 check('muatan berulang ditolak (409)', dup.status === 409, String(dup.status));
@@ -161,13 +201,21 @@ check('ditanda duplicate', dup.body?.duplicate === true, JSON.stringify(dup.body
 console.log('\n== Worker: bacaan balik ==');
 const st = await get('/api/status');
 check('status melaporkan 2 pemerhatian', st.body?.observations === 2, String(st.body?.observations));
-check(`status melaporkan ${recs2.length} belum diperiksa`,
+check(`status melaporkan ${recs2.length} belum diperiksa (senarai terbaharu)`,
   st.body?.outstanding === recs2.length, `${st.body?.outstanding} vs ${recs2.length}`);
-check('bilangan diperiksa sepadan',
-  st.body?.inspected === 536 - recs2.length, `${st.body?.inspected} vs ${536 - recs2.length}`);
+check(`status melaporkan ${goneLabels.length} sudah diperiksa`,
+  st.body?.inspected === goneLabels.length, `${st.body?.inspected} vs ${goneLabels.length}`);
+check(`jumlah aset = ${everSeen.size} label yang pernah dilihat`,
+  st.body?.assets === everSeen.size, `${st.body?.assets} vs ${everSeen.size}`);
+check('status melaporkan masa muat naik terakhir', st.body?.last === o2.body?.observedAt,
+  `${st.body?.last} vs ${o2.body?.observedAt}`);
 const dsum = (st.body?.departments || []).reduce((x, d) => x + d.bilangan, 0);
 check('jumlah bahagian = belum diperiksa', dsum === st.body?.outstanding,
   `${dsum} vs ${st.body?.outstanding}`);
+check('bilangan setiap bahagian sepadan dengan senarai terbaharu',
+  (st.body?.departments || []).every((d) => secondDepts.get(d.bahagian) === d.bilangan)
+  && (st.body?.departments || []).length === secondDepts.size,
+  JSON.stringify([...secondDepts.entries()]));
 check('peratus dikira', typeof st.body?.progressPercent === 'number');
 
 /* The viewer's screen: the current list, with the five asset fields it renders. */
@@ -189,25 +237,38 @@ check('setiap baris membawa lima nilai, dalam susunan lajur',
    would only be testing the fixture's extraction order. */
 const curRows = expand(cur.body);
 const curLabels = curRows.map((r) => r.Label).sort();
-const wantLabels = recs2.map((r) => r.Label).sort();
-check('setiap label dalam pemerhatian terakhir hadir',
+const wantLabels = [...secondSet].sort();
+check('senarai semasa ialah fail terbaharu, label demi label',
   JSON.stringify(curLabels) === JSON.stringify(wantLabels),
   `${curLabels.length} vs ${wantLabels.length}`);
+check('aset yang tidak lagi dalam senarai itu TIADA dalam senarai semasa',
+  !!gone && !curLabels.includes(gone.Label),
+  gone ? gone.Label : 'tiada label sedemikian dalam fixture');
+const bahagianOf = new Map();
+[...recs1, ...recs2].forEach((r) => bahagianOf.set(r.Label, r.Bahagian || ''));
 check('medan Bahagian datang daripada rekod',
-  curRows.every((r) => r.Bahagian === (recs2.find((x) => x.Label === r.Label)?.Bahagian || '')),
-  'ada rekod yang tidak sepadan');
+  curRows.every((r) => (r.Bahagian || '') === (bahagianOf.get(r.Label) ?? '')),
+  JSON.stringify(curRows.find((r) => (r.Bahagian || '') !== (bahagianOf.get(r.Label) ?? '')) || null));
 check('bahagian disertakan untuk tapisan',
   (cur.body?.departments || []).length > 0, JSON.stringify(cur.body?.departments));
 check('baki bahagian = bilangan aset',
-  (cur.body?.departments || []).reduce((n, d) => n + d.bilangan, 0) === recs2.length);
+  (cur.body?.departments || []).reduce((n, d) => n + d.bilangan, 0) === recs2.length,
+  String((cur.body?.departments || []).reduce((n, d) => n + d.bilangan, 0)));
 
 const pr = await get('/api/progress');
 check('progress mengembalikan 2 titik masa', (pr.body?.progress || []).length === 2,
   String((pr.body?.progress || []).length));
+const p1 = (pr.body?.progress || [])[0];
 const p2 = (pr.body?.progress || [])[1];
-check('progress: peratus sepadan',
-  p2?.percent === Math.round((expected * 100 / recs1.length) * 10) / 10,
-  `${p2?.percent} vs ${Math.round((expected * 100 / recs1.length) * 10) / 10}`);
+check('progress: titik masa pertama tiada pembanding', p1?.previous === null
+  && p1?.percent === null, JSON.stringify([p1?.previous, p1?.percent]));
+check('progress: titik masa pertama tiada pecahan bahagian',
+  (p1?.deptProgress || []).length === 0, String((p1?.deptProgress || []).length));
+check('progress: pembanding titik masa kedua = saiz senarai lama',
+  p2?.previous === recs1.length, `${p2?.previous} vs ${recs1.length}`);
+check('progress: peratus diukur terhadap senarai lama',
+  p2?.percent === Math.round((goneLabels.length * 100 / recs1.length) * 10) / 10,
+  `${p2?.percent} vs ${Math.round((goneLabels.length * 100 / recs1.length) * 10) / 10}`);
 
 /* Per-department deltas must be exact set differences, not count arithmetic: a
    department that lost 5 and gained 5 is not the same as one that lost 10 and
@@ -215,14 +276,20 @@ check('progress: peratus sepadan',
 const dp = p2?.deptProgress || [];
 const dpSum = (key) => dp.reduce((n, d) => n + (d[key] || 0), 0);
 check('progress: pecahan bahagian disertakan', dp.length > 0, String(dp.length));
+check('progress: setiap bahagian dalam kedua-dua senarai muncul sekali',
+  dp.map((d) => d.bahagian).sort().join('|')
+  === [...new Set([...deptsOf(recs1), ...deptsOf(recs2)])].sort().join('|'),
+  JSON.stringify(dp.map((d) => d.bahagian)));
 check('progress: jumlah diperiksa setiap bahagian = jumlah keseluruhan',
-  dpSum('inspected') === expected, `${dpSum('inspected')} vs ${expected}`);
-check('progress: jumlah baharu setiap bahagian = 63', dpSum('added') === 63, String(dpSum('added')));
+  dpSum('inspected') === goneLabels.length, `${dpSum('inspected')} vs ${goneLabels.length}`);
+check('progress: jumlah baharu setiap bahagian = jumlah keseluruhan',
+  dpSum('added') === freshLabels.length, `${dpSum('added')} vs ${freshLabels.length}`);
 check('progress: awal - diperiksa + baharu = akhir untuk setiap bahagian',
   dp.every((d) => d.awal - d.inspected + d.added === d.akhir),
   JSON.stringify(dp.find((d) => d.awal - d.inspected + d.added !== d.akhir)));
-check('progress: titik masa pertama tiada pecahan',
-  (pr.body?.progress?.[0]?.deptProgress || []).length === 0);
+check('progress: tahun awal setiap bahagian = senarai lama bahagian itu',
+  dp.every((d) => d.awal === (deptCount(recs1).get(d.bahagian) || 0)),
+  JSON.stringify(dp.map((d) => [d.bahagian, d.awal])));
 
 const mem = await get(`/api/observations/${o2.body.observationId}`);
 check('keahlian pemerhatian 2 tepat', mem.body?.labels?.length === recs2.length,
@@ -231,30 +298,133 @@ const want = new Set(recs2.map((r) => r.Label));
 const got = new Set(mem.body?.labels || []);
 check('setiap label dipulihara', want.size === got.size && [...want].every((l) => got.has(l)));
 
-const gone = recs1[400].Label;
-const tl = await get(`/api/timeline/${encodeURIComponent(gone)}`);
-check(`timeline ${gone} dijumpai`, tl.status === 200, String(tl.status));
-check('label hilang ditandakan sudah diperiksa', tl.body?.status === 'Sudah diperiksa',
-  String(tl.body?.status));
+const tl = await get(`/api/timeline/${encodeURIComponent(gone.Label)}`);
+check(`timeline ${gone.Label} dijumpai`, tl.status === 200, String(tl.status));
+check('label yang hilang daripada senarai terbaharu ditanda sudah diperiksa',
+  tl.body?.status === 'Sudah diperiksa', String(tl.body?.status));
 check('muncul dalam 1 pemerhatian sahaja', tl.body?.present?.length === 1,
   JSON.stringify(tl.body?.present?.length));
-const alive = recs1[10].Label;
-const tl2 = await get(`/api/timeline/${encodeURIComponent(alive)}`);
-check('label masih ada ditandakan belum diperiksa', tl2.body?.status === 'Belum diperiksa',
-  String(tl2.body?.status));
+const tl2 = await get(`/api/timeline/${encodeURIComponent(alive.Label)}`);
+check('label yang masih dalam senarai KEKAL belum diperiksa',
+  tl2.body?.status === 'Belum diperiksa', `${alive.Label}: ${tl2.body?.status}`);
+check('label yang kekal muncul dalam 2 pemerhatian', tl2.body?.present?.length === 2,
+  JSON.stringify(tl2.body?.present?.length));
 
 const hist = await get('/api/history');
-check('history mengembalikan 536 label', hist.body?.count === 536, String(hist.body?.count));
+check(`history mengembalikan ${everSeen.size} label`, hist.body?.count === everSeen.size,
+  String(hist.body?.count));
 const histRows = expand(hist.body);
 const outstandingRows = histRows.filter((r) => r.Status === 'Belum diperiksa');
 check('history: bilangan belum diperiksa sepadan',
   outstandingRows.length === recs2.length, `${outstandingRows.length} vs ${recs2.length}`);
+check('history: label yang hilang itu ditanda sudah diperiksa',
+  histRows.find((r) => r.Label === gone.Label)?.Status === 'Sudah diperiksa',
+  String(histRows.find((r) => r.Label === gone.Label)?.Status));
+/* Missing once, out of the two points in time this fixture creates. */
+check('history: kali hilang dikira antara titik masa',
+  Number(histRows.find((r) => r.Label === gone.Label)?.['Kali Hilang']) === 1,
+  String(histRows.find((r) => r.Label === gone.Label)?.['Kali Hilang']));
 check('history: lajur dijangka',
   JSON.stringify(hist.body?.fields)
   === JSON.stringify(['Label', 'Jenis Aset', 'Bahagian', 'Lokasi Terkini', 'Pertama Dilihat',
     'Terakhir Dilihat', 'Kali Dilihat', 'Kali Hilang', 'Muncul Semula', 'Status'])
   && histRows.every((r) => r.Label && r.Status),
   JSON.stringify(hist.body?.fields));
+
+/* ---- the report's own figures -------------------------------------------------------
+ *
+ * The report publishes THREE numbers copied from the register (ringkasan Sistem Pengurusan
+ * Aset Alih): total aset, sudah diperiksa, and the register's own belum diperiksa. None of
+ * them can be derived from an upload - a file is the list of assets still waiting, so it
+ * says nothing about how many the institution holds. The register's "belum diperiksa" is the
+ * one that makes an upload CHECKABLE: it is compared against the file's own count, so a
+ * half-complete export shows up as a gap instead of quietly becoming the report.
+ */
+console.log('\n== Worker: angka manual laporan ==');
+
+const figStart = await get('/api/status');
+check('tanpa angka manual, status melaporkan null (bukan sifar)',
+  figStart.body?.manual && figStart.body.manual.totalAssets === null
+  && figStart.body.manual.inspected === null && figStart.body.manual.outstanding === null
+  && figStart.body.manual.updatedAt === null,
+  JSON.stringify(figStart.body?.manual));
+
+check('angka negatif ditolak', (await post('/api/figures', { totalAssets: -1 })).status === 400);
+check('angka pecahan ditolak', (await post('/api/figures', { totalAssets: 12.5 })).status === 400);
+check('teks bukan angka ditolak',
+  (await post('/api/figures', { inspected: 'banyak' })).status === 400);
+check('angka terlalu besar ditolak',
+  (await post('/api/figures', { totalAssets: 99999999 })).status === 400);
+check('angka SPAA terlalu besar ditolak',
+  (await post('/api/figures', { outstanding: 99999999 })).status === 400);
+check('teks bukan angka ditolak untuk angka SPAA',
+  (await post('/api/figures', { outstanding: 'banyak' })).status === 400);
+check('tiada angka langsung -> 400, bukan senyap',
+  (await post('/api/figures', { totalAssets: null, inspected: 'x' })).status === 400);
+
+const figSaved = await post('/api/figures', { totalAssets: 600, inspected: 550, outstanding: 50 });
+check('angka disimpan', figSaved.status === 200 && figSaved.body?.figures?.totalAssets === 600,
+  JSON.stringify(figSaved.body));
+check('angka kedua disimpan juga', figSaved.body?.figures?.inspected === 550,
+  JSON.stringify(figSaved.body?.figures));
+check('angka SPAA (belum diperiksa) disimpan juga',
+  figSaved.body?.figures?.outstanding === 50, JSON.stringify(figSaved.body?.figures));
+check('masa simpan direkod', typeof figSaved.body?.figures?.updatedAt === 'string'
+  && !Number.isNaN(Date.parse(figSaved.body.figures.updatedAt)),
+  String(figSaved.body?.figures?.updatedAt));
+
+const figAfter = await get('/api/status');
+check('status seterusnya membawa angka manual', figAfter.body?.manual?.totalAssets === 600,
+  JSON.stringify(figAfter.body?.manual));
+check('status juga membawa angka SPAA', figAfter.body?.manual?.outstanding === 50,
+  JSON.stringify(figAfter.body?.manual));
+check('"belum diperiksa" yang DIKIRA tidak dipengaruhi angka manual',
+  figAfter.body?.outstanding === st.body?.outstanding,
+  `${figAfter.body?.outstanding} vs ${st.body?.outstanding}`);
+check('kiraan sistem kekal dilaporkan di sebelah angka manual',
+  figAfter.body?.assets === st.body?.assets && figAfter.body?.inspected === st.body?.inspected,
+  JSON.stringify({ assets: figAfter.body?.assets, inspected: figAfter.body?.inspected }));
+check('bootstrap juga membawa angka manual',
+  (await get('/api/bootstrap')).body?.status?.manual?.totalAssets === 600);
+
+/* One figure alone is allowed: the others come back as null, not as the system's count. */
+const figHalf = await post('/api/figures', { totalAssets: 700, inspected: null, outstanding: null });
+check('satu angka sahaja diterima, yang lain kembali null',
+  figHalf.status === 200 && figHalf.body?.figures?.totalAssets === 700
+  && figHalf.body.figures.inspected === null && figHalf.body.figures.outstanding === null,
+  JSON.stringify(figHalf.body?.figures));
+
+/* Clearing all three is a real outcome: "trust the data again". */
+const figClear = await post('/api/figures', { totalAssets: null, inspected: null, outstanding: null });
+check('mengosongkan ketiga-tiganya membuang angka manual',
+  figClear.status === 200 && figClear.body?.cleared === true
+  && figClear.body.figures.totalAssets === null, JSON.stringify(figClear.body));
+check('angka SPAA juga kembali null', figClear.body?.figures?.outstanding === null,
+  JSON.stringify(figClear.body?.figures));
+check('selepas dibuang, status kembali kepada kiraan data',
+  (await get('/api/status')).body?.manual?.totalAssets === null);
+
+/* A correction is a DECISION, not an observation: the next upload must not undo it.
+   The upload is a SHORTER list on purpose - a byte-identical one is refused by the
+   duplicate guard, which would prove nothing about the figures. */
+await post('/api/figures', { totalAssets: 600, inspected: 550, outstanding: 50 });
+const uploadAfterFigures = await post('/api/observations', {
+  observedAt: '2026-03-05T08:00:00Z',
+  records: recs2.slice(0, -1),
+});
+check('muat naik baharu selepas itu diterima', uploadAfterFigures.status === 201,
+  `${uploadAfterFigures.status} ${JSON.stringify(uploadAfterFigures.body)}`);
+check('angka manual TIDAK ditimpa oleh muat naik',
+  (await get('/api/status')).body?.manual?.totalAssets === 600,
+  JSON.stringify((await get('/api/status')).body?.manual));
+check('angka SPAA TIDAK ditimpa oleh muat naik',
+  (await get('/api/status')).body?.manual?.outstanding === 50,
+  JSON.stringify((await get('/api/status')).body?.manual));
+/* Removed again so the counts the sections below rely on stay as they were. */
+await call('DELETE', `/api/observations/${uploadAfterFigures.body?.observationId}`);
+await post('/api/figures', { totalAssets: null, inspected: null, outstanding: null });
+check('selepas ujian, tiada angka manual tertinggal',
+  (await get('/api/status')).body?.manual?.totalAssets === null);
 
 /* ---- caching and payload size: the difference between a usable page and a slow one -- */
 
@@ -364,6 +534,71 @@ check('bootstrap juga boleh disahkan dengan ETag',
     { 'If-None-Match': boot.headers.get('etag') }, env)).status === 304);
 check('bootstrap melalui laluan admin juga berfungsi',
   (await call('GET', '/api/admin/bootstrap')).status === 200);
+
+/* ---- what a reader is sent, and what a repeat visit costs ---- */
+
+console.log('\n== Worker: bootstrap pembaca & pengesahan versi ==');
+const readerEnv = { ...env, ACCESS_MODE: 'open' };
+const readerBoot = await callAs('GET', '/api/bootstrap', undefined, {}, readerEnv);
+check('pembaca ialah viewer', readerBoot.body?.me?.role === 'viewer', JSON.stringify(readerBoot.body?.me));
+check('pembaca tidak dihantar kemajuan dan sejarah (tab Sejarah milik admin)',
+  readerBoot.body?.progress === undefined && readerBoot.body?.history === undefined,
+  Object.keys(readerBoot.body || {}).join(','));
+check('pembaca masih mendapat senarai semasa dan ringkasan yang sama dengan admin',
+  readerBoot.body?.current?.assets === boot.body.current.assets
+  && readerBoot.body?.status?.outstanding === boot.body.status.outstanding
+  && readerBoot.body?.status?.assets === boot.body.status.assets,
+  `${readerBoot.body?.current?.assets}/${readerBoot.body?.status?.outstanding}/${readerBoot.body?.status?.assets}`);
+check('ETag pembaca berbeza daripada ETag admin (jawapan berbeza mengikut peranan)',
+  readerBoot.headers.get('etag') !== boot.headers.get('etag'));
+
+/* 304 must not run the heavy queries: it costs the one version query, nothing else. */
+let queryCount = 0;
+const countingEnv = {
+  ...env,
+  DB: new Proxy(env.DB, {
+    get(target, key) {
+      if (key === 'prepare') return (...args) => { queryCount += 1; return target.prepare(...args); };
+      const value = target[key];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }),
+};
+const warm = await callAs('GET', '/api/bootstrap', undefined, {}, countingEnv);
+queryCount = 0;
+const cheap = await callAs('GET', '/api/bootstrap', undefined,
+  { 'If-None-Match': warm.headers.get('etag') }, countingEnv);
+check('pengesahan semula dijawab 304', cheap.status === 304, String(cheap.status));
+check(`304 hanya menjalankan satu pertanyaan versi (${queryCount})`, queryCount === 1, String(queryCount));
+
+/* The validator must move when the data does, or a 304 would hide a real change. */
+const verEnv = { ...makeEnv(), ACCESS_MODE: 'trusted' };
+const verA = await callAs('GET', '/api/current', undefined, {}, verEnv);
+await callAs('POST', '/api/observations', {
+  observedAt: '2026-07-01T00:00:00Z', records: [{ Label: 'VERSI/1', Bahagian: 'BENGKEL VERSI' }],
+}, {}, verEnv);
+const verB = await callAs('GET', '/api/current', undefined, { 'If-None-Match': verA.headers.get('etag') }, verEnv);
+check('muat naik baharu menukar ETag, jadi ETag lama tidak lagi 304',
+  verB.status === 200 && verB.headers.get('etag') !== verA.headers.get('etag'),
+  `${verB.status}`);
+await callAs('POST', '/api/overrides', { overrides: [{ label: 'VERSI/1', bahagian: 'BENGKEL VERSI' }] }, {}, verEnv);
+const verC = await callAs('GET', '/api/overrides', undefined, {}, verEnv);
+await callAs('POST', '/api/overrides', { overrides: [{ label: 'VERSI/1', bahagian: '' }] }, {}, verEnv);
+const verD = await callAs('GET', '/api/overrides', undefined, { 'If-None-Match': verC.headers.get('etag') }, verEnv);
+check('menukar tetapan Bahagian menukar ETag /api/overrides', verD.status === 200, String(verD.status));
+
+/* /api/progress is a lookup of stored movement, and a stored row is trusted only while the
+   point it was compared against is still the previous one. */
+const stored = await env.DB.prepare('SELECT COUNT(*) AS n FROM obs_progress').first();
+const runsNow = (await get('/api/observations')).body.observations.length;
+check(`pergerakan setiap titik disimpan (${stored.n} / ${runsNow})`, stored.n === runsNow, String(stored.n));
+const lastRun = (await get('/api/progress')).body.progress.at(-1);
+await env.DB.prepare('UPDATE obs_progress SET prev_id = -5, inspected = 999 WHERE observation_id = ?')
+  .bind(lastRun.id).run();
+const healed = (await get('/api/progress')).body.progress.at(-1);
+check('baris tersimpan yang prev_id-nya tidak lagi sepadan dikira semula',
+  healed.inspected === lastRun.inspected && healed.inspected !== 999,
+  `${healed.inspected} vs ${lastRun.inspected}`);
 
 
 console.log('\n== Worker: CSV ==');

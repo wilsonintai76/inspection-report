@@ -109,6 +109,18 @@ const payload = {
     last: '2026-09-01T08:00:00Z',
     reappeared: 0,
     departments: [],
+    /* The register's own figures, copied in by an admin: a reader must SEE these and must
+       not be able to change them. They add up to each other (12 inspected + (N + 28)
+       outstanding = N + 40 total) because all three come from ONE ringkasan - and they
+       deliberately disagree with the FILE, which is the check a reader must also be able
+       to see. */
+    manual: {
+      totalAssets: allRecords.length + 40,
+      inspected: 12,
+      outstanding: allRecords.length + 28,
+      updatedAt: '2026-09-02T14:15:00Z',
+      updatedBy: 'admin@contoh.my',
+    },
   },
   progress: [{
     id: 1, observedAt: '2026-09-01T08:00:00Z', assets: allRecords.length, previous: null,
@@ -194,6 +206,44 @@ const script = `
       sel.dispatchEvent(new Event('change', { bubbles: true }));
       await wait(60);
 
+      /* Sejarah Pemeriksaan is an ADMIN tab, so a reader must not have it - not hidden, and
+         not merely unreachable: the tab button, the panel and that panel's cards must all be
+         absent from the DOM. A filter is set first so the check below also proves the reader
+         can get back to the whole list on their own. */
+      sel.value = ${JSON.stringify(targetDept)};
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait(60);
+      var staleBahagian = document.getElementById('mergedCount').textContent;
+      sel.value = '';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait(60);
+      var afterCard = {
+        rows: tableRows().length,
+        note: document.getElementById('mergedCount').textContent,
+        staleBahagian: staleBahagian,
+      };
+
+      /* The register's figures, the movement table and the outstanding list all live inside
+         that tab, so for a reader there is nothing on screen to read - and hiding the
+         button is still not a permission, so a direct write is attempted as well. */
+      var readerFigures = {
+        historyTab: !!document.getElementById('tab-history'),
+        historyTabButton: !!document.querySelector('#tabs button[data-tab="history"]'),
+        cards: H.figures().cards.length,
+        outstandingCard: !!document.getElementById('cardOutstanding'),
+        registerPanels: ['figuresMissing', 'figuresMismatch', 'figuresFileGap']
+          .filter(function (id) { return !!document.getElementById(id); }),
+        movementTables: document.querySelectorAll('#historyWrap table.data-grid').length,
+        figuresButton: !!document.getElementById('btnFigures'),
+        purgeButton: !!document.getElementById('btnPurgeRuns'),
+        manual: H.figures().manual,
+        refused: await fetch('/api/admin/figures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ totalAssets: 1, inspected: 1, outstanding: 1 }),
+        }).then(function (r) { return r.status; }),
+      };
+
       // Export what the viewer sees, and the printable rendering.
       var csv = H.exportCsvText();
       var print = H.preparePrint();
@@ -213,6 +263,13 @@ const script = `
         summaryWarning: summaryWarning,
         summaryClick: summaryClick,
         afterClick: afterClick,
+        cardOpen: null,
+        afterCard: afterCard,
+        readerFigures: readerFigures,
+        topCards: H.snapshot().cards,
+        topCardMeta: Array.prototype.map.call(document.querySelectorAll('#cards .card'), function (c) {
+          return { tag: c.tagName, title: c.getAttribute('title') || (c.querySelector('[title]') ? 'x' : '') };
+        }),
         server: server,
         allRows: allRows,
         counter: counter,
@@ -328,18 +385,18 @@ check('hasil dipaparkan kepada viewer', snap.panels.result === true);
 check('kawalan tapisan viewer dipaparkan', snap.panels.viewerTools === true);
 check('butang hantar ke D1 disembunyikan', snap.panels.recordRun === false);
 check('butang pratonton hanya untuk admin', snap.panels.previewButton === false);
-check('tab terhad kepada ringkasan, senarai dan sejarah',
-  JSON.stringify(snap.tabs.slice().sort()) === JSON.stringify(['history', 'merged', 'summary'])
-  && snap.tabs.indexOf('dupes') < 0 && snap.tabs.indexOf('conflicts') < 0
-  && snap.tabs.indexOf('sources') < 0,
+check('tab terhad kepada ringkasan dan senarai semasa',
+  JSON.stringify(snap.tabs.slice().sort()) === JSON.stringify(['merged', 'summary'])
+  && snap.tabs.indexOf('history') < 0 && snap.tabs.indexOf('dupes') < 0
+  && snap.tabs.indexOf('conflicts') < 0 && snap.tabs.indexOf('sources') < 0,
   JSON.stringify(snap.tabs));
 
 /* The words matter: a viewer did not merge anything, so the tab must not say so. */
 check('tab senarai dinamakan untuk viewer, bukan "gabungan"',
   snap.tabLabels.merged === 'Senarai Semasa', JSON.stringify(snap.tabLabels));
-check('ringkasan dan sejarah kekal dinamakan sama',
+check('pembaca tiada label tab Sejarah sama sekali',
   snap.tabLabels.summary === 'Ringkasan Bahagian'
-  && snap.tabLabels.history === 'Sejarah Pemeriksaan', JSON.stringify(snap.tabLabels));
+  && snap.tabLabels.history === undefined, JSON.stringify(snap.tabLabels));
 check('lajur "Salinan" (konsep gabungan) tiada bagi viewer',
   JSON.stringify(snap.headers)
   === JSON.stringify(['#', 'Label', 'Jenis Aset', 'Pegawai Penempatan', 'Bahagian', 'Lokasi Terkini']),
@@ -351,8 +408,9 @@ check('amaran tiada-bahagian tidak menyuruh viewer mengedit sistem sumber',
   && !/sistem sumber/.test(snap.summaryWarning), snap.summaryWarning);
 
 /* ---- the list comes from D1 ---- */
-check('senarai dibaca daripada /api/current',
-  snap.apiPaths.indexOf('GET /api/current') >= 0, JSON.stringify(snap.apiPaths.slice(0, 8)));
+check('senarai dibaca daripada /api/bootstrap, tanpa muat turun kedua',
+  snap.apiPaths.indexOf('GET /api/bootstrap') >= 0
+  && !snap.apiPaths.some((p) => p.indexOf('GET /api/current') === 0), JSON.stringify(snap.apiPaths.slice(0, 8)));
 check(`pembilang sepadan dengan ${snap.server.current.assets} aset dalam D1`,
   snap.counter === String(snap.server.current.assets), `${snap.counter} vs ${snap.server.current.assets}`);
 check('nota bilangan menyebut jumlah penuh, bukan hanya halaman ini',
@@ -383,6 +441,69 @@ check('senarai bertukar kepada tab itu',
 check(`nota selepas klik menyatakan ${snap.wantedDeptCount} aset`,
   snap.afterClick.note.indexOf(String(snap.wantedDeptCount)) > 0, snap.afterClick.note);
 check('baris dirender selepas klik', snap.afterClick.rows > 0, String(snap.afterClick.rows));
+
+/* ---- Sejarah Pemeriksaan is an admin tab ----
+ *
+ * It carries the register's three figures, the movement between uploads and the outstanding
+ * list - none of which a reader needs, and the destructive buttons live behind it too. So a
+ * reader gets no such tab: the button is absent, the panel is absent, and the numbers are not
+ * on screen at all. "Not shown" is stronger than "hidden", and the fixtures' register figures
+ * are deliberately set so that the checks below would PASS if any of that were still rendered. */
+const rfig = snap.readerFigures;
+check('pembaca tiada tab Sejarah Pemeriksaan',
+  rfig.historyTabButton === false && rfig.historyTab === false,
+  JSON.stringify({ button: rfig.historyTabButton, panel: rfig.historyTab }));
+check('pembaca tiada kad ringkasan dalam tab itu', rfig.cards === 0, String(rfig.cards));
+check('pembaca tiada kad "Aset belum diperiksa" untuk ditekan',
+  rfig.outstandingCard === false, String(rfig.outstandingCard));
+check('pembaca tiada panel angka daftar atau panel beza SPAA',
+  rfig.registerPanels.length === 0, JSON.stringify(rfig.registerPanels));
+check('pembaca tiada jadual pergerakan antara muat naik',
+  rfig.movementTables === 0, String(rfig.movementTables));
+check('butang kemas kini angka dan butang padam tiada untuk pembaca',
+  rfig.figuresButton === false && rfig.purgeButton === false,
+  JSON.stringify({ figures: rfig.figuresButton, purge: rfig.purgeButton }));
+/* The API still refuses a reader's write - and the register's figures are unchanged, even
+   though they are no longer on their screen. */
+check('API menolak angka daripada pembaca walaupun tanpa butang',
+  rfig.refused === 403, String(rfig.refused));
+check('angka daftar tidak berubah selepas cubaan itu',
+  rfig.manual && rfig.manual.totalAssets === snap.server.current.assets + 40
+  && rfig.manual.outstanding === snap.server.current.assets + 28,
+  JSON.stringify(rfig.manual));
+
+/* ---- the reader's headline cards: the same four the admin's dashboard carries ----
+ *
+ * Built by one shared function, so the reader sees the register's figures with the same
+ * labels and sub-lines. What stays admin-only is everything that EDITS or INTERROGATES them:
+ * the figures dialog, the register-arithmetic panels, the pressable card and the tooltips. */
+const top = snap.topCards;
+const cur = snap.server.current.assets;
+check('kad pembaca ikut turutan papan pemuka admin',
+  top.map((c) => c.split('=')[0]).join('|')
+  === 'Total aset|Aset belum diperiksa|Sudah diperiksa|Peratus pemeriksaan selesai|Bahagian terlibat|Kemas kini terakhir',
+  JSON.stringify(top));
+check('kad Total aset membawa angka daftar', top[0].indexOf(`Total aset=${cur + 40}`) === 0, JSON.stringify(top));
+check('kad Aset belum diperiksa mendahulukan angka SPAA dan menyebut kiraan fail',
+  top[1].indexOf(`Aset belum diperiksa=${cur + 28}`) === 0, JSON.stringify(top));
+check('kad Sudah diperiksa membawa angka daftar', top[2].indexOf('Sudah diperiksa=12') === 0, JSON.stringify(top));
+check('kad Peratus pemeriksaan selesai = sudah diperiksa / total aset',
+  top[3] === `Peratus pemeriksaan selesai=${((12 * 100) / (cur + 40)).toFixed(1)}%`, JSON.stringify(top));
+check('kad Kemas kini terakhir membawa tarikh angka daftar',
+  top[5].indexOf('Kemas kini terakhir=2026-09-02') === 0, JSON.stringify(top));
+check('kad pembaca tiada tooltip admin dan tidak boleh ditekan',
+  snap.topCardMeta.every((c) => !c.title && c.tag === 'DIV'), JSON.stringify(snap.topCardMeta));
+
+/* ---- reading the list needs no tab of its own ---- */
+/* The table pages at 250 rows, so "the whole list" is proved by the note (which states the
+   full count) and by the row count returning to what an unfiltered load showed - not by
+   counting every one of the 536 rows on screen. */
+check('pembaca boleh kembali kepada senarai penuh tanpa tab Sejarah',
+  snap.afterCard.rows === snap.allRows && snap.afterCard.note !== snap.afterCard.staleBahagian,
+  JSON.stringify(snap.afterCard));
+check('nota senarai menyebut jumlah penuh itu',
+  snap.afterCard.note.indexOf(String(snap.server.current.assets)) > 0,
+  JSON.stringify(snap.afterCard));
 
 /* ---- printing ---- */
 check(`cetakan merangkumi semua baris, bukan satu halaman (${snap.print.rows})`,

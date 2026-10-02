@@ -9,7 +9,7 @@
  *      utilities with `@apply`.
  *
  * The second layer is not decoration. The verification suites select on `.notice.warn`,
- * `.card .k`, `table.grid`, `.pill`, `.tabLabel` and friends, and more importantly
+ * `.card .k`, `table.data-grid`, `.pill`, `.tabLabel` and friends, and more importantly
  * those names are what makes the markup readable - `rounded-panel border-line` repeated
  * forty times says less than `class="panel"`. Keeping them means the port changed how
  * the page is BUILT, not what it looks like or what it is made of.
@@ -130,6 +130,15 @@
     @apply text-[13px] text-ink-soft;
   }
 
+  /*
+   * The folder-picker tip. Its own class, NOT `.sub`: the drop box treats a click on any
+   * `.sub` element as "open the file dialog", so a second `.sub` here would silently open
+   * the wrong picker when a user clicks the sentence about the folder picker.
+   */
+  .drop .tip {
+    @apply mx-auto mt-3 text-[12.5px] max-w-160 text-ink-soft;
+  }
+
   .row-actions {
     @apply mt-3.5 flex flex-wrap justify-center gap-2.5;
   }
@@ -180,22 +189,42 @@
   }
 
   /* ---------- summary cards ---------- */
+  /* 150px, not 168px: the history tab shows FIVE cards, and the wider minimum pushed the
+     last one - the date card, the one actually looked at - onto a row of its own. Measured:
+     five fit across once the content box is ~800px wide, i.e. a ~860px window. */
   .cards {
-    @apply grid gap-3 grid-cols-[repeat(auto-fit,minmax(168px,1fr))];
+    @apply grid gap-3 grid-cols-[repeat(auto-fit,minmax(150px,1fr))];
   }
 
+  /* A column, with the label at the top and the value pinned to the bottom: five cards in
+     a row means one label may wrap, and "ASET BELUM DIPERIKSA" does - which used to push
+     that card's number down out of line with the others. The gap that `mt-0.75` used to
+     give the value lives on the label now, so it is a minimum rather than the only space. */
   .card {
-    @apply rounded-panel border border-line bg-[#fbfcfe] px-3.75 py-3.25;
+    @apply flex flex-col rounded-panel border border-line bg-[#fbfcfe] px-3.75 py-3.25;
   }
 
   .card .k {
-    @apply text-[12.5px] tracking-[.5px] text-ink-soft uppercase;
+    @apply mb-0.75 text-[12.5px] tracking-[.5px] text-ink-soft uppercase;
   }
 
   .card .v {
-    @apply mt-0.75 text-[26px] leading-[1.2] font-bold;
+    @apply mt-auto text-[26px] leading-[1.2] font-bold;
   }
 
+  /* A second, smaller line under the value - a clock time under a date, or where a figure
+     came from. Never the figure itself: that stays the one thing the eye lands on. */
+  .card .sub {
+    @apply text-[12.5px] text-ink-soft;
+    margin-top: 1px;
+  }
+
+  /* The one card whose value is not a count but a full date: at the size the numbers use,
+     "2026-02-15" wraps in a five-card row, and a date broken across two lines reads as two
+     numbers. Sized down instead, and kept on one line. */
+  .card.date .v {
+    @apply text-[19px] leading-[1.6] whitespace-nowrap tabular-nums;
+  }
   .card.good {
     @apply border-[#bfe4d2] bg-ok-soft;
   }
@@ -220,37 +249,64 @@
     @apply text-bad;
   }
 
+  /* A card you can press. The card box keeps its own colour, and the button inside it is
+     only a hit area, so the generic `button` rule above (padding, border, its own hover
+     background) has to be undone rather than inherited - what is wanted from it is the
+     cursor, the press feedback and the focus ring. */
+  .card.clickable {
+    @apply p-0;
+  }
+
+  .card.clickable:hover {
+    @apply border-brand;
+  }
+
+  .card.clickable:hover .card-btn {
+    @apply bg-transparent;
+  }
+
+  .card-btn {
+    @apply flex w-full cursor-pointer flex-col items-stretch gap-0 rounded-panel border-0 bg-transparent px-3.75 py-3.25 text-left font-normal text-ink;
+  }
+
   /* ---------- tables ---------- */
   .table-scroll {
     @apply max-h-[62vh] overflow-auto border-t border-line;
   }
 
-  table.grid {
+  /* ---------- tables ----------
+     The class is `data-grid`, NOT `grid`. It used to be `grid`, and that collided with
+     Tailwind's `.grid { display: grid }` utility: an element's own class name is scanned as
+     a candidate utility, so every table silently became `display: grid`. The thead and the
+     tbody then became INDEPENDENT grids, each sizing its own columns, and the headings sat
+     over the wrong cells (the header row looked misaligned with everything under it).
+     Renaming is the fix; a `!important` would only have hidden the collision. */
+  table.data-grid {
     @apply w-full border-separate border-spacing-0 text-[13.5px];
   }
 
-  table.grid th,
-  table.grid td {
+  table.data-grid th,
+  table.data-grid td {
     @apply border-b border-line px-2.75 py-2 text-left align-top;
   }
 
-  table.grid thead th {
+  table.data-grid thead th {
     @apply sticky top-0 z-2 border-b border-[#cdd9e8] bg-head text-[12.5px] tracking-[.4px] whitespace-nowrap text-[#35465c] uppercase;
   }
 
-  table.grid thead th.sortable {
+  table.data-grid thead th.sortable {
     @apply cursor-pointer select-none;
   }
 
-  table.grid thead th.sortable:hover {
+  table.data-grid thead th.sortable:hover {
     @apply bg-[#e3ebf5];
   }
 
-  table.grid tbody tr:nth-child(even) {
+  table.data-grid tbody tr:nth-child(even) {
     @apply bg-[#fafcfe];
   }
 
-  table.grid tbody tr:hover {
+  table.data-grid tbody tr:hover {
     @apply bg-brand-soft;
   }
 
@@ -323,6 +379,7 @@
 
   input[type="search"],
   input[type="text"],
+  input[type="number"],
   select {
     @apply min-w-37.5 rounded-btn border border-line bg-white px-2.5 py-1.75 text-[13.5px] text-ink;
   }
@@ -390,6 +447,12 @@
     @apply font-semibold break-all;
   }
 
+  /* The folder a file came from, kept quiet: the NAME is what identifies the export, the
+     folder is what tells two identical names apart. */
+  .filelist .fdir {
+    @apply font-normal text-ink-soft;
+  }
+
   .filelist .fmeta {
     @apply text-[12.5px] text-ink-soft;
   }
@@ -406,19 +469,19 @@
     @apply bg-warn-soft! shadow-[inset_2px_0_0_var(--color-warn)];
   }
 
-  table.grid tr.clickable {
+  table.data-grid tr.clickable {
     @apply cursor-pointer;
   }
 
-  table.grid tr.clickable:hover td {
+  table.data-grid tr.clickable:hover td {
     @apply bg-brand-soft;
   }
 
-  table.grid tr.row-warn td {
+  table.data-grid tr.row-warn td {
     @apply bg-warn-soft;
   }
 
-  table.grid tr.row-warn:hover td {
+  table.data-grid tr.row-warn:hover td {
     @apply bg-[#f8e9c4];
   }
 
@@ -485,6 +548,21 @@
     @apply w-full min-w-0 rounded-btn border border-line bg-white px-2.5 py-1.75 text-ink;
   }
 
+  /* The figures dialog: a label over each number field, and the arithmetic underneath.
+     The arithmetic is the point of the dialog - the three numbers may legitimately not
+     add up - so when they do not, the line stops looking like a remark. */
+  .modal label {
+    @apply mt-2.5 mb-1 block text-[12px] tracking-[.4px] text-ink-soft uppercase;
+  }
+
+  .modal input[type="number"] {
+    @apply w-full min-w-0 tabular-nums;
+  }
+
+  .fig-off {
+    @apply mb-2.5 rounded-btn border border-warn/40 bg-warn-soft px-3 py-2 text-warn;
+  }
+
   /* The destructive button. It looks different on purpose: the one action that cannot be
      undone from the page should not look like the one beside it. */
   .danger {
@@ -533,11 +611,11 @@
     overflow: visible;
   }
 
-  table.grid {
+  table.data-grid {
     font-size: 10.5px;
   }
 
-  table.grid thead th {
+  table.data-grid thead th {
     background: #eee !important;
   }
 }

@@ -24,7 +24,14 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     "types": ["vite/client"],
+    /* Same aliases the Vite preset applies at build time. */
+    "paths": {
+      "react": ["./node_modules/preact/compat"],
+      "react-dom": ["./node_modules/preact/compat"],
+      "react-dom/client": ["./node_modules/preact/compat/client"]
+    },
 
     "noEmit": true,
     "isolatedModules": true,

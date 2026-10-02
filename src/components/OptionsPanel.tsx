@@ -44,7 +44,7 @@ export default function OptionsPanel({ hidden, isViewer }: { hidden?: boolean; i
           <select
             id="selKey"
             value={state.keyStrategy}
-            onChange={(e) => api.setKeyStrategy(e.target.value)}
+            onChange={(e) => api.setKeyStrategy(e.currentTarget.value)}
           >
             <option value="label">Label aset (disyorkan)</option>
             <option value="labelAndType">Label aset + Jenis Aset</option>
@@ -52,7 +52,7 @@ export default function OptionsPanel({ hidden, isViewer }: { hidden?: boolean; i
           </select>
         </Field>
         <Field label="Tapis Bahagian" htmlFor="selBahagian">
-          <select id="selBahagian" value={state.bahagian} onChange={(e) => api.setBahagian(e.target.value)}>
+          <select id="selBahagian" value={state.bahagian} onChange={(e) => api.setBahagian(e.currentTarget.value)}>
             <option value="">Semua bahagian</option>
             {departmentOptions(counts).map((k) => (
               <option value={k} key={k}>{`${k} (${counts[k]})`}</option>
@@ -60,7 +60,7 @@ export default function OptionsPanel({ hidden, isViewer }: { hidden?: boolean; i
           </select>
         </Field>
         <Field label="Susun ikut" htmlFor="selSort">
-          <select id="selSort" value={state.sortKey} onChange={(e) => api.setSort(e.target.value)}>
+          <select id="selSort" value={state.sortKey} onChange={(e) => api.setSort(e.currentTarget.value)}>
             <option value="jenis">Jenis Aset, kemudian Label</option>
             <option value="label">Label aset</option>
             <option value="pegawai">Pegawai Penempatan</option>

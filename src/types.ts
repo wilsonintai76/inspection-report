@@ -38,6 +38,13 @@ export type FieldName =
 /** A file the user loaded, with whatever the parser made of it. */
 export interface SourceEntry {
   name: string;
+  /**
+   * Where the file sat inside the folder it came from, e.g. "2026-09/ABR.xls".
+   *
+   * Empty when the file was picked on its own. It is what tells two identically named
+   * exports from different month-folders apart, which the name alone cannot do.
+   */
+  path?: string;
   size: number;
   text: string;
   sha?: string;
@@ -54,6 +61,8 @@ export interface SourceEntry {
 /** What a caller hands the reducer when files are picked or restored. */
 export interface SourceEntryInput {
   name: string;
+  /** Relative path inside the folder it came from; '' or absent when picked alone. */
+  path?: string;
   size?: number;
   text: string;
   sha?: string;
@@ -123,6 +132,25 @@ export interface DeptProgress {
   akhir: number;
 }
 
+/**
+ * The three numbers an admin copies from the register (ringkasan Sistem Pengurusan Aset
+ * Alih), typed in by hand.
+ *
+ * The uploaded export decides what the FILE lists; these three are claims about the whole
+ * register, and the register is the authority. `outstanding` is what makes an upload
+ * checkable: the register's figure sits beside the file's own count, so a file that is not
+ * the whole list shows up as a gap. `null` means "not set".
+ */
+export interface ManualFigures {
+  totalAssets: number | null;
+  inspected: number | null;
+  /** The register's "belum diperiksa" - the reference the upload is checked against. */
+  outstanding: number | null;
+  /** When the figures were last stored, or null when nothing was ever typed in. */
+  updatedAt: string | null;
+  updatedBy: string;
+}
+
 export interface StatusSummary {
   observations: number;
   assets: number;
@@ -130,6 +158,8 @@ export interface StatusSummary {
   inspected: number;
   first: string | null;
   last: string | null;
+  /** Present on a Worker that stores handwritten figures; absent on an older one. */
+  manual?: ManualFigures;
   progressPercent?: number;
   reappeared?: number;
   departments: DepartmentCount[];
@@ -227,8 +257,9 @@ export interface BootstrapBody {
   health: ApiHealth;
   status: StatusSummary;
   current: ApiCurrent;
-  progress: { progress: ProgressPoint[] };
-  history: ApiHistory;
+  /** Admin only: the Worker leaves both out for a reader, who never sees the Sejarah tab. */
+  progress?: { progress: ProgressPoint[] };
+  history?: ApiHistory;
   overrides: ApiOverrides;
 }
 
@@ -371,6 +402,9 @@ export interface ActionResult {
   error?: string;
   runs?: number;
   cleared?: number;
+  /** Set by `setFigures`: the figures the Worker now holds. */
+  figures?: ManualFigures;
+  outstanding?: number;
   /** Set by the purge: how many assets went with the points in time. */
   assets?: number;
   at?: string;
@@ -399,11 +433,39 @@ export interface HistoryRun {
 
 export interface HistorySummary {
   runs: number;
-  outstanding: number;
-  resolved: number;
+  /** How many assets the NEWEST upload lists - the file's own count, not the register's. */
+  outstandingFile: number;
   reappeared: number;
   first: string | null;
   last: string | null;
+  /**
+   * The register's own total, exactly as an admin keyed it in - `null` until he does.
+   *
+   * NOT derived from the uploads, deliberately: every uploaded file is the list of assets
+   * still OUTSTANDING, so it says nothing about how many assets the institution actually
+   * holds. That number comes from the ringkasan of Sistem Pengurusan Aset Alih.
+   */
+  total: number | null;
+  /** The register's inspected count, keyed in from the same ringkasan. `null` until then. */
+  resolved: number | null;
+  /**
+   * The register's "belum diperiksa", keyed in from the same ringkasan. `null` until then.
+   *
+   * This is the figure the report shows, and `outstandingFile` is the one it is checked
+   * against: the register says how many assets should still be waiting, and the upload says
+   * how many the file actually listed. A gap between them is a half-complete export or an
+   * out-of-date register - either way the report says so rather than picking one silently.
+   */
+  outstanding: number | null;
+  /**
+   * What the UPLOADS say, which is a different question: how many distinct labels D1 has
+   * seen, and how many of them are absent from the newest list. Shown as context in the
+   * dialog and in tooltips, never as the register's figures.
+   */
+  derived: { total: number; inspected: number };
+  /** When the numbers last changed: the newest upload, or a later handwritten one. */
+  updatedAt: string | null;
+  updatedBy: string;
 }
 
 export interface HistoryView {
@@ -426,9 +488,23 @@ export interface PrintHeader {
   rows: number;
 }
 
-/** A card above the list. */
+/**
+ * A card above a list.
+ *
+ * A card that carries an action is pressable, which is how a count becomes a door to the
+ * list it counts instead of a dead end. Without `onClick` the card stays inert text, so a
+ * suite can tell the two apart by the element itself (div vs button).
+ */
 export interface CardSpec {
   k: string;
   v: string | number;
   cls?: string;
+  /** A second, smaller line under the value - a time under a date, for instance. */
+  sub?: string;
+  /** Present = the card can be pressed. */
+  onClick?: () => void;
+  /** Tooltip for a pressable card, so where it goes is not a surprise. */
+  title?: string;
+  /** Anchor id, so a suite can press a card by name rather than by position. */
+  id?: string;
 }

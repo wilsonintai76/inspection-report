@@ -107,7 +107,7 @@ export function MergedTab({ isViewer, printHeader }: { isViewer: boolean; printH
         />
         <div className="field">
           <label htmlFor="selViewerBahagian">Tapis Bahagian</label>
-          <select id="selViewerBahagian" value={state.bahagian} onChange={(e) => api.setBahagian(e.target.value)}>
+          <select id="selViewerBahagian" value={state.bahagian} onChange={(e) => api.setBahagian(e.currentTarget.value)}>
             <option value="">Semua bahagian</option>
             {departmentKeys(state.merged).map((k) => (
               <option value={k} key={k}>{`${k} (${departmentTally(state.merged)[k]})`}</option>
@@ -116,7 +116,7 @@ export function MergedTab({ isViewer, printHeader }: { isViewer: boolean; printH
         </div>
         <div className="field">
           <label htmlFor="selViewerSort">Susun ikut</label>
-          <select id="selViewerSort" value={state.sortKey} onChange={(e) => api.setSort(e.target.value)}>
+          <select id="selViewerSort" value={state.sortKey} onChange={(e) => api.setSort(e.currentTarget.value)}>
             <option value="jenis">Jenis Aset, kemudian Label</option>
             <option value="label">Label aset</option>
             <option value="bahagian">Bahagian</option>
